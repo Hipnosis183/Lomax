@@ -15,8 +15,9 @@ Lomax+ is a loader for Lomax. `LOADER.EXE` starts the untouched retail `LOMAX.EX
 |---|---|
 | `LOADER.EXE` | Loader: starts `LOMAX.EXE` with `LOADER.DLL` injected. |
 | `LOADER.DLL` | The in-memory fixes. |
-| `LOADER.LOG` | Written with Loader Debug Log on (Properties > Extra). |
+| `LOADER.LOG` | Written with Loader Log on (Properties > Extra). |
 | `MUSIC\TRACKnn.WAV` | CD music tracks, extracted by `LOADER.EXE` from a `.cue`/`.bin` disc image (see [CD music](#cd-music)). |
+| `MODS\<name>\` | Mods: `<name>.DLL`, `<name>.INI` and the mod's data (see [Mods](#mods)). |
 | `LOADER\` | Sources: `loader.c`, the DLL's modules in `dll\` (see [Source layout](#source-layout)), `build.bat`, `readme.md`, the 32-bit MinHook in `minhook\` (`libminhook.a`, `minhook.h`) and the docs in `docs\`. |
 | `LOMAX.EXE` | Original, untouched. SHA-256 `5D5DE600…8CA13A79`. Installed by `LOADER.EXE` from a disc image when missing (see [Installing from the disc image](#installing-from-the-disc-image)). |
 | `LOADER\docs\loader.md` | This document. |
@@ -102,7 +103,7 @@ The display options are in the **Display** box of Properties > System and are sa
 | Screen Size | the game's `Settings\WinW` / `WinH` | 2x (640 x 480) | At once | The window's client size: 1x–4x the internal picture (320 x 240, or W x 240 with widescreen). It replaces the game's list ("Current Settings", the two windows, the 8/16-bit fullscreen modes). The page's index (+0x8C), which `Menu_OnProperties` would pass to `Display_SetVideoMode`, is cleared, and the loader sizes the window itself; it also leaves fullscreen. The game's default size (`g_WinClientW/H`, used when the registry has none) becomes 640x480. |
 | Start in Fullscreen | `StartFullscreen` | Off | Next start | Borderless fullscreen after the first surface init. |
 | Widescreen, Width | `Widescreen` (0 = Disabled (320), 1 = 16:9 (432), 2 = Max (512), 3 = Custom (320 - 512)), `WidescreenWidth` (the custom width) | Disabled | Next start | Widen the internal screen (see [Widescreen](#widescreen)). Width is editable only with Custom: 320–512, rounded to a multiple of 16. |
-| VSync | `VSync` | On | Next start | Game ticks locked to the display refresh. `Game_Frame` times its ticks with `timeGetTime` (`ms*10/167`, 59.88 Hz) and presents each frame at once, without waiting for the display. Whole milliseconds put frames 16 or 17 ms apart (sometimes 15 or 18), and 59.88 Hz drifts against a 60/120 Hz display (a full cycle every ~8 s at 60 Hz); whenever the frames come close to a refresh, the jitter puts them on alternate sides of it and frames are shown twice and skipped for a moment, with the FPS counter (presents per second) still at 60. The option replaces that timing block (0x404BD1, up to the 5-tick clamp) with `vsync_ticks`. A thread waits on the display driver's vertical blank (`D3DKMTWaitForVerticalBlankEvent`, for the monitor the game window is on, followed when it moves) and timestamps every refresh. With a refresh rate within 2% of a multiple of the tick rate (60, 120, 180, 240, 59.94 Hz; 50 and 100 Hz with `Speed50Hz`), one tick runs every N refreshes, drawn and presented right after the refresh, so each frame has a whole refresh to reach the screen and stays there for N refreshes. The game runs at refresh/N: 60.0 instead of 59.88 ticks per second at 60 Hz. After a stall, up to 5 ticks catch up, as in the original. Other rates (75, 144 Hz), no vblank events, or none for 100 ms fall back to the original timer; the loading screen keeps its own. DWM timing isn't usable for this: `DWM_TIMING_INFO.cRefresh` only moves when DWM composes, so a tick count based on it runs too fast on some setups and too slow on others, and frames timed halfway between refreshes from `qpcVBlank` skip about one frame in five at 120 Hz. Measured at 120 Hz: 60.00 ticks per second, each frame started within 0.1 ms of the refresh. With Loader Debug Log on, the log shows ticks and refreshes every 5 s. |
+| VSync | `VSync` | On | Next start | Game ticks locked to the display refresh. `Game_Frame` times its ticks with `timeGetTime` (`ms*10/167`, 59.88 Hz) and presents each frame at once, without waiting for the display. Whole milliseconds put frames 16 or 17 ms apart (sometimes 15 or 18), and 59.88 Hz drifts against a 60/120 Hz display (a full cycle every ~8 s at 60 Hz); whenever the frames come close to a refresh, the jitter puts them on alternate sides of it and frames are shown twice and skipped for a moment, with the FPS counter (presents per second) still at 60. The option replaces that timing block (0x404BD1, up to the 5-tick clamp) with `vsync_ticks`. A thread waits on the display driver's vertical blank (`D3DKMTWaitForVerticalBlankEvent`, for the monitor the game window is on, followed when it moves) and timestamps every refresh. With a refresh rate within 2% of a multiple of the tick rate (60, 120, 180, 240, 59.94 Hz; 50 and 100 Hz with `Speed50Hz`), one tick runs every N refreshes, drawn and presented right after the refresh, so each frame has a whole refresh to reach the screen and stays there for N refreshes. The game runs at refresh/N: 60.0 instead of 59.88 ticks per second at 60 Hz. After a stall, up to 5 ticks catch up, as in the original. Other rates (75, 144 Hz), no vblank events, or none for 100 ms fall back to the original timer; the loading screen keeps its own. DWM timing isn't usable for this: `DWM_TIMING_INFO.cRefresh` only moves when DWM composes, so a tick count based on it runs too fast on some setups and too slow on others, and frames timed halfway between refreshes from `qpcVBlank` skip about one frame in five at 120 Hz. Measured at 120 Hz: 60.00 ticks per second, each frame started within 0.1 ms of the refresh. With Loader Log on, the log shows ticks and refreshes every 5 s. |
 | FPS Override | `FPSOverride`, `FPS` | Off (120) | Next start | Frames drawn per second above the tick rate (up to 1000); the game logic stays at 60 Hz. The frames between ticks run no game code: they redraw the last tick's sprite queue with everything moved part of the way, see [High frame rate](#high-frame-rate). 0 = one frame per tick, as the original. Off = one frame per tick, as the original. The value is kept between 1 and 1000. |
 
 After OK, when Widescreen, VSync or FPS Override now differs from what the running session started with, a message box (posted to the game window, so it shows once the sheet has closed) says "Some settings need a restart to take effect." Changing one back, or Start in Fullscreen, shows nothing.
@@ -122,7 +123,8 @@ The other options are on the **Extra** page, the last tab of Properties, and are
 | RGB Emulation | `RGBEmulation` | On | Next start | Hooks `D3D_SelectHardwareDriver` / `D3D_SelectSoftwareDriver` (0x405D40 / 0x405ED0). When the game picks the software "Ramp Emulation" driver, it switches to "RGB Emulation" (`g_D3DRenderMode` 2). Ramp needs 8-bit palettized textures, which are filled through a GDI BitBlt that ignores the texture palette on current Windows, so scaled and rotated sprites (title logo, boat) came out purple. RGB uses 16-bit RGB565 textures instead. |
 | Fast Blit | `FastBlit` | On | Next start | The loader copies each frame's sprites and tiles itself instead of making one DirectDraw `Blt` per sprite (see [Fast sprite blitting](#fast-sprite-blitting)). Several times faster in busy scenes on current Windows, where 16-bit DirectDraw is emulated on the CPU. Off = DirectDraw's `Blt`, still timed in the log for comparison. |
 | Transparency | `Transparency` (0 = Automatic, 1 = Solid, 2 = Dither, 3 = Blend) | Automatic | Next start | Translucent sprites and fades: Automatic, Solid, Dither, Blend. Automatic: the game's own choice. It takes the hardware path, with real blending, only when DirectDraw reports hardware colour-keyed blits (NVIDIA does, Intel doesn't); otherwise it uses a software driver, whose blend caps are 0, with checkerboard sprites and the tile dissolve. Dither: always the checkerboard and dissolve. After `D3D_InitDevice`, `g_bD3DTranslucency` (0x469A00) is cleared, which sends sprites to `Sprite_GetDitheredSurface` and fades to `Render_DissolveFade`. Solid: the same, plus hooks so that translucent sprites are drawn opaque and fades aren't drawn. `Sprite_GetDitheredSurface` (0x40A510) returns the sprite's own surface (+0x18), which is the game's own fallback. `Render_DissolveFade` (0x4055C0) draws nothing, but still makes its 32×32 calls to the game's `rand()` (0x43AAD0) while a fade runs and the game isn't paused. Game logic uses the same generator (spring boxes, particles, bosses), so dropping those calls would desync the attract demos. Blend: forces the hardware path (surfaces in video memory, so `D3D_SelectHardwareDriver` picks the "Direct3D HAL"); the z-buffer request falls back from 32 to 16/24 bits. On the Intel drivers the first Direct3D draw then crashes inside the driver (`igc32.dll`), whatever the render states. |
-| Loader Debug Log | `Log` | Off | At once | Writes `LOADER.LOG` in the game folder (hooks installed, CD state, mode changes). It is emptied when the game starts with the log on. |
+| Load Mod | `Mod` (a string: the mod's folder name, empty = None) | None | Next start | The mod to run: None, or one of the mods found in `MODS` at the start, by the `Name` in its INI (see [Mods](#mods)). |
+| Loader Log | `Log` | Off | At once | Writes `LOADER.LOG` in the game folder (hooks installed, CD state, mode changes). It is emptied when the game starts with the log on. |
 | — | `DemoTrace`, `Mute` | 0 | Next start | Testing aids, not on the page (set them in the registry): log spawns, despawns and the player position every 30 ticks (to compare a demo between width 320 and a wide run); set the effect/ambient/CD volumes to 0. |
 
 ## Building
@@ -185,7 +187,7 @@ The GDI scaler takes longer than one frame in widescreen fullscreen (a 2160x1200
 3. **Vertical scaling:** output rows are copied from the cache with `memcpy`, or blended between two cached rows at row edges, into a 32-bit DIB section.
 4. **Output:** one 1:1 `BitBlt` to the window.
 
-With Loader Debug Log on, the average present time is logged every 600 frames, e.g. `present: 432x240 -> 1920x1066 fast sharp, avg 2.49 ms`.
+With Loader Log on, the average present time is logged every 600 frames, e.g. `present: 432x240 -> 1920x1066 fast sharp, avg 2.49 ms`.
 
 ## Installing from the disc image
 
@@ -215,9 +217,9 @@ Checked against a `SETUP.EXE` install: all 110 files are identical.
 
 For this disc that is tracks 2–26, about 600 MB. The image can be removed afterwards.
 
-**Playback (`LOADER.DLL`).** The disc is never used: every MCI string containing `cdaudio` is answered by the DLL instead of MCI, so no drive or mounted image is read. `CD_VerifyLomaxDisc` always succeeds. Without `MUSIC\TRACK??.*` files, `g_bCDAudioAvailable` is set to 0 and there is no music. When the files exist:
+**Playback (`LOADER.DLL`).** The disc is never used: every MCI string containing `cdaudio` is answered by the DLL instead of MCI, so no drive or mounted image is read. `CD_VerifyLomaxDisc` always succeeds. Without `TRACKnn.*` files in `MUSIC` or a mod's `MUSIC`, `g_bCDAudioAvailable` is set to 0 and there is no music. When the files exist:
 - `g_bCDAudioAvailable` stays 1.
-- A thread plays `MUSIC\TRACKnn.*` through `waveOut`, in 4 × 0.1 s buffers.
+- A thread plays `MUSIC\TRACKnn.*` through `waveOut`, in 4 × 0.1 s buffers. A track that isn't in `MUSIC` is looked for in the running mod's `MODS\<name>\MUSIC` (see [Mods](#mods)).
   - WAV is read directly.
   - FLAC, MP3, M4A and WMA go through Media Foundation (`mfplat`/`mfreadwrite`, loaded only when such a file is used). So does OGG, when its codec (Web Media Extensions) is installed.
   - Files must decode to 44.1 kHz 16-bit stereo.
@@ -238,7 +240,7 @@ The game hardcodes its width as instruction immediates, so a table in `widescree
 | Display | Surfaces 448 wide (multiple of 32 for the dissolve-fade tiles; only 432 is shown). D3D viewport and z-buffer. View matrix _11 = 320/W and dvScaleX = W/2, so 3D sprites stay 1:1. Present source rect. Screen sizes 1x–4x (and F5/F6) = W×240 … 4W×960. |
 | Drawing | Right-edge clipping in every `Sprite_Queue*` function, `Actor_Draw` and `TileLayer_Draw`. Fade loops. Screen centre for D3D quads and the pseudo-3D meshes. `MeshProp_Draw` (imm8 → imm16 rewrite). `×320` multiplies rewritten as `imul ×W`. |
 | Camera | Camera x = player.x − W/2. Scroll limit = (map tiles − W/16)×16. Map right edge for collisions. Player and forced-scroll screen clamps. Zoom centring. Trapdoor start/checkpoint cameras. |
-| Narrow levels | 16 of 104 maps are narrower than 27 tiles. The camera clamp is rewritten to centre them (scroll = maxScroll/2 when the map is narrower than the screen). The present draws black bars over the wrapped tiles on both sides, but only for maps up to 25 tiles wide, so the 26-tile Evil Ed arena has none. On such maps the repeated floor at the sides is solid. The collision code has a horizontal wrap the game never uses: with bit 0x20000000 of the player state flags (0x49C4C4), `Actor_CheckWallCollision` (0x412F50) and `Plane_FindGroundY` (0x413B90) read the collision map at x modulo the map width. Hooks set the bit for the duration of those calls and lift the wall check's stop at the map's right end. Without this, Lomax, kept only 16 px inside the screen edges, walked off the floor at width 512, where 48 px of the map repeat on each side. Off during demos. Parallax background planes and screen-space parallax sprites get the same centring offset (hooks on `ParallaxPlane_ApplyCamera` and `ParallaxSprite_Draw`), so slower or fixed layers such as the continue screen's lit floor patches stay lined up. |
+| Narrow levels | 16 of 104 maps are narrower than 27 tiles. The camera clamp is rewritten to centre them (scroll = maxScroll/2 when the map is narrower than the screen). The present draws black bars over the wrapped tiles on both sides (the narrowed view), for every such map but the 26-tile Evil Ed arena, which shows its map repeated (`WS_REPEAT_TILES`, `ws_narrowed` in `lomax.h`; until 2026-11-12 bars were only for maps up to 25 tiles, and mods' wider maps repeated too). Inside the bars the screen is the map's width: a hook on `Player_Update` (0x40FB70) rewrites, whenever the bars' widths change, Player_Update's keep-on-screen limit (16 px from each edge: 0x4113C4 / 0x4113C9 and 0x411401 / 0x411409) and the HUD's edge counters (the power icon, its ammo, the lives and the 1UP's target; cheat mode's FPS text at 0x404F4F and world.level at 0x404F9C) by the bars' widths (`ws_inset_update`), so the player and the HUD stay inside them; not during demos. On the Evil Ed arena the repeated floor at the sides is solid. The collision code has a horizontal wrap the game never uses: with bit 0x20000000 of the player state flags (0x49C4C4), `Actor_CheckWallCollision` (0x412F50) and `Plane_FindGroundY` (0x413B90) read the collision map at x modulo the map width. Hooks set the bit for the duration of those calls and lift the wall check's stop at the map's right end. Without this, Lomax, kept only 16 px inside the screen edges, walked off the floor at width 512, where 48 px of the map repeat on each side. Off during demos. Parallax background planes and screen-space parallax sprites get the same centring offset (hooks on `ParallaxPlane_ApplyCamera` and `ParallaxSprite_Draw`), so slower or fixed layers such as the continue screen's lit floor patches stay lined up. |
 | Narrow backgrounds | Background tile layers narrower than the screen (not the current plane) continue mirrored past their end instead of repeating, as the backdrop sprites do. This applies only on an axis where the original 320x240 screen never reached the layer's end. Layers the original already showed repeated keep the repeat: their parallax scroll (camera range × factor + offset) left the map, or their offset moves. Examples are the forest and hills of 2.1 and the castles of 3.2. The log lists them (`background plane N repeats`). |
 | Objects | Spawn, no-pop-in and despawn windows. Rockslides, ambient flyers, floater spawner, particles, confetti, spare helmet, falling meshes. Water strips. Sound panning centre. |
 | UI | HUD shifted as a block to stay centred. Banners, level timer, hint box, PRESS BUTTON TO START, logo, credits text table, continue counter, title pan and exit, map password box. Copyright and language-select x (small code caves in `int3` padding). |
@@ -254,7 +256,7 @@ The startup window size comes from the registry (`WinW`/`WinH`), where the game 
 ### Expected side effects
 
 - **Earlier activation:** objects activate and spawn about 56 px earlier on each side relative to Lomax, and despawn later. Things the designers hid just off-screen are now visible.
-- **Narrow areas:** single-screen areas (bonus rooms, ending, continue/language screens, the Evil Ed arena) show black bars on the sides.
+- **Narrow areas:** single-screen areas (bonus rooms, ending, continue/language screens) show black bars on the sides; the Evil Ed arena shows its floor repeated. Narrowed view (2026-11-12): tested with a mod's 480-px map at width 512 (bars 16 / 16 px, the player stopped 16 px inside them on both sides, the HUD counters and cheat mode's FPS and world.level texts inside); Lomax's own narrow rooms and the Evil Ed arena not looked at again.
 - **Rockslides:** they trigger relative to the wider right edge.
 - **Airship boss:** debris spreads further, and its crusher is drawn with one more tile.
 
@@ -362,7 +364,7 @@ The `Blt` call in that loop (0x404DFD) is replaced by `sb_blt`:
 
 ### Log
 
-With Loader Debug Log on, the log shows the loop's time per frame every 5 s, with the number of blits and how many went to DirectDraw (normally 0).
+With Loader Log on, the log shows the loop's time per frame every 5 s, with the number of blits and how many went to DirectDraw (normally 0).
 
 - **The loop's time:** from the first blit to the end of the last bucket, including the buckets' Direct3D quads.
 - **With Fast Blit off:** the same line times DirectDraw's own `Blt`, for comparison.
@@ -413,7 +415,7 @@ Bindings are stored as positions on an Xbox controller. The fields name them the
 - **Left stick and D-pad.** In play, a left stick direction and the same D-pad direction count as one input. An action bound to `LS-Left` also follows `D-Left`, and the reverse. The Controls page still records whichever one was pressed.
 - **Axes** count as pressed past 30% of their range from the centre.
 - **Xbox triggers.** Through this interface, an Xbox controller's two triggers share the Z axis, so pressing both together reads as neither.
-- **Log.** With Loader Debug Log on, the log names the controller, gives its vendor:product ID and axes, and says whether the Sony translation is in use.
+- **Log.** With Loader Log on, the log names the controller, gives its vendor:product ID and axes, and says whether the Sony translation is in use.
 
 Default controller layout:
 
@@ -429,6 +431,123 @@ Default controller layout:
 | Pause | Start | Options |
 
 Look Down and Look Up are unbound.
+
+## Mods
+
+Lomax+ loads a mod and plays its music; it knows nothing else about what a mod does. A mod is a DLL that patches the game in memory itself, a description file, plus whatever data it reads. At most one mod runs at a time: the one chosen in Properties > Extra > Load Mod.
+
+### Layout
+
+A mod is a folder in the game's `MODS` folder, named after the mod, which holds everything of it:
+
+| Path | Required | What |
+|---|---|---|
+| `MODS\<name>\<name>.DLL` | Yes | The mod's code. The folder name and the DLL's base name must match (case doesn't matter). |
+| `MODS\<name>\<name>.INI` | Yes | The mod's description (below). |
+| `MODS\<name>\MUSIC\TRACKnn.*` | No | CD tracks the mod adds (see [Music](#music)). |
+| `MODS\<name>\…` | No | Anything else the mod reads itself: levels, sprites, sounds, settings, a log. |
+
+The INI's `[Lomax]` section describes the mod:
+
+```ini
+[Lomax]
+Name=Flink
+Author=...
+Description=...
+Files=WORLDS\LEVELS.INI, WORLDS\TITLE.WLD, WORLDS\MAP.WLD
+```
+
+| Key | What |
+|---|---|
+| `Name` | Shown in the Load Mod list (up to 63 characters). Without it, the folder name. |
+| `Author`, `Description` | For the reader; Lomax+ doesn't show them. |
+| `Files` | Optional: files or folders in the mod's folder the mod can't run without, separated by commas. |
+
+- **The list.** `mods_scan` (`main.c`) looks through `MODS` once, at the start: every folder holding both `<name>.DLL` and `<name>.INI` is listed, sorted by `Name`, up to 32. A folder without them is not listed, and the log says so (`mod <name>: no <name>.DLL or <name>.INI in it, not listed`). Folders whose name starts with `.` are skipped silently. A mod copied in while the game runs is listed at the next start.
+- **The choice.** The Load Mod list (Properties > Extra) shows None, always first, then the listed mods. The choice is saved as the folder name in the registry string `Extra\Mod` (empty = None) and takes effect at the next start (the restart note comes up when it differs from the mod running). A saved mod that is no longer listed shows as None.
+- **The check.** At the start, `mods_init` checks the chosen mod: its folder, `<name>.DLL`, `<name>.INI` and every entry of `Files`. If any is missing, an information box says so ("The selected mod "…" couldn't be loaded. Lomax will start normally without any mods loaded."), the log lists the missing files, and the game starts without the mod; the choice goes back to None (`Extra\Mod` ""), so the box comes once. The same happens when the mod's DLL fails to load (`load_mod`).
+- **Only `<name>.DLL` is loaded.** DLLs directly in `MODS`, other DLLs in the mod's folder and the other mods are left alone; the mod can load its own DLLs itself.
+- **Installing and removing** a mod is copying or deleting its folder (and choosing it, or None, in Load Mod). Nothing outside `MODS\<name>` needs to change, and a mod shouldn't write to the game's own folders (`WORLDS`, `MUSIC`, `SFX`, …), so removing the folder removes the mod completely.
+
+### When and how a mod is loaded
+
+`load_mod` (`main.c`) loads the chosen mod's DLL at the end of `LomaxFix_Init`, after all of Lomax+'s hooks and patches are installed. At that point (see [How it starts the game](#how-it-starts-the-game)):
+
+- **The game's code hasn't run yet.** Its main thread is suspended at the EXE's entry point, so the C runtime, MFC, the window, DirectDraw, DirectSound and every game global are still in their initial state. Windows has already loaded and initialised `LOMAX.EXE`'s imported DLLs, so the import table is filled in.
+- **The thread is the loader's.** `LoadLibraryA` is called from the remote thread `LOADER.EXE` created for `LomaxFix_Init`; the mod's `DllMain` (`DLL_PROCESS_ATTACH`) runs there, under the Windows loader lock. Patching memory (`VirtualProtect`, writing code and data, MinHook, import-table entries) is safe there. Creating windows, waiting on other threads or loading many other DLLs isn't: defer such work to a hook that runs later on the game's thread.
+- **The current directory is the game folder**, wherever `LOADER.EXE` was started from. The game opens its data relative to it (`WORLDS\<file>`, `SFX\…`), so a path such as `..\MODS\<name>\WORLDS\X.WLD` passed where the game expects a `WORLDS` file name reaches the mod's folder. To find its own folder, a mod calls `GetModuleFileNameA` with the `HINSTANCE` it gets in `DllMain`.
+- **Failure.** If `LoadLibraryA` fails, including when `DllMain` returns `FALSE`, a message box and the log say so (`mod <name>: failed to load`) and the game starts without it, with no mod music either. A mod that finds something it can't handle (unexpected bytes, a missing file) should patch nothing and return `TRUE`, so the game still runs.
+- **No mods without Lomax+'s hooks.** If `LOADER.DLL`'s own check fails (not the retail `LOMAX.EXE`, see [Safety check](#safety-check)) or MinHook can't start, `LomaxFix_Init` returns before `mods_init` and no mod is loaded (nor checked).
+- **Lifetime.** The DLL stays loaded until the game exits (`DLL_PROCESS_DETACH` at process exit). `LOMAX.EXE` run directly loads no mods.
+
+Lomax+ exports nothing for mods to call and has no mod API: a mod depends only on the retail `LOMAX.EXE` and Windows, and works with any other way of loading its DLL into the game before its code runs (an injector, a proxy DLL).
+
+### Building a mod
+
+- **32-bit.** `LOMAX.EXE` is a 32-bit process, so the DLL must be a 32-bit (x86) DLL. Any compiler that makes one works (Lomax+ itself is built with MSYS2 mingw32 GCC).
+- **No exports needed.** `DllMain` is the only entry point Lomax+ uses.
+- **Dependencies.** Keep to Windows system DLLs, or ship others in the mod's folder and load them with a full path, since the DLL search path is the game folder's, not the mod's.
+- **Windows XP.** Lomax+ itself runs on XP. A mod that should too avoids APIs newer than XP (or loads them with `GetProcAddress`) and is linked against a C runtime XP has (`msvcrt.dll` with MinGW).
+
+### Sharing the game with Lomax+
+
+A mod's patches go on top of Lomax+'s. The game it sees in `DllMain` already has:
+
+- **Function hooks** (MinHook): the entry of each function named in the [Hooks](#hooks) table and the sections below (`Game_Frame`, `Game_SetupNextLevel`, `Player_Update`, `Actor_Draw`, `TileLayer_Draw`, `Text_DrawString`, `Sprite_QueueScreen`, `Objects_SpawnNearCamera`, `Actors_UpdateAll`, `Actors_DrawAndCull`, `Level_LoadWorld`, `Level_Start`, …, depending on the options). Their first bytes are a `jmp` into `LOADER.DLL`. A mod that hooks the same entry with a library that relocates the existing `jmp` (MinHook does) chains with Lomax+'s hook; a mod that checks those bytes against the retail EXE will find the `jmp` instead.
+- **Import-table hooks**: `mciSendStringA`, `GetDeviceCaps`, `CreateWindowExA`, `LoadMenuA`, `CreateDialogIndirectParamA`, `PropertySheetA` and `MessageBoxA` in `LOMAX.EXE`'s import table point into `LOADER.DLL`. Replacing an entry again works if the mod keeps the value it found and calls it.
+- **Code patches**: the sites in the [Hooks](#hooks) table, the widescreen table (`kWsPatches` in `widescreen.c`, 199 sites, only with widescreen on), and the sites of 50 Hz mode, VSync, FPS Override and Fast Blit. With an option off, its sites keep the retail bytes.
+
+So that both keep working, a mod should:
+
+- **check the retail bytes of every site it patches** before patching, and patch nothing when one doesn't match (the way Lomax+ does);
+- **prefer call sites, data and function pointers** over function entries Lomax+ hooks, and code that no Lomax+ option patches: then its checks pass whatever options are on;
+- **call through the game's functions** rather than copying their code, so Lomax+'s hooks on them still apply.
+
+Lomax+ also changes game state at run time that a mod may meet:
+
+- **Level rows.** With Language Select on, the title's row flag `g_LevelDefs[0x17]` +8 bit 2 (clear the back buffer) is set while the language screen shows and cleared on the next `Game_SetupNextLevel`. A mod that sets row flags itself sets them again after `Game_SetupNextLevel` returns.
+- **Loading screen.** With Loading Screen on, `Game_Frame` is replaced for 428 frames after `Game_SetupNextLevel` loads a new section, and no game tick runs meanwhile; CD music is stopped and its track restarted at the end.
+- **Widescreen.** The camera, screen width and spawn windows follow the width W (see [Widescreen](#widescreen)). A level map narrower than W gets the narrowed view (black bars, the player and HUD counters kept inside them), except at exactly 26 tiles (`WS_REPEAT_TILES`, the Evil Ed arena), which shows the map repeated. A mod's maps can be any width; a mod doesn't need to pad narrow maps.
+- **Demos.** While a `DEMOS` recording is loaded, the game logic sees the original 320-px camera (see the Demos row in [Widescreen](#widescreen)).
+- **Sound backend.** On Vista and later the sound driver uses DirectSound mixing (32 voices), else the software mixer with 16 voices (see [Hooks](#hooks)). Samples loaded through the game's sound driver work with both.
+
+### Drawing for FPS Override
+
+With FPS Override, the frames between ticks redraw the last tick's sprite queue, each entry moved by the motion of what queued it (see [High frame rate](#high-frame-rate)). What a mod draws moves smoothly when it goes through the game's own drawing functions:
+
+- **`Actor_Draw`**: tagged by the actor and by how many times it was drawn this frame (its n-th call), anchored at the actor's screen position. Each draw call of an actor gets its own motion, so pieces that move independently of each other should each be drawn by their own actor (a stand-in actor per piece), in the same order every tick; otherwise pieces of one actor swap tags when their number changes.
+- **`TileLayer_Draw`**: tagged by the layer, anchored at its scroll.
+- **`Text_DrawString`**: anchored at its screen position, and moved only between two frames with the same text.
+- **`Sprite_QueueScreen`** from outside those: screen-fixed, never moved.
+- **Anything else** queued into the sprite queue follows the current plane's camera.
+- **Jumps** of more than 48 px per tick (`HFR_MAX_JUMP`) aren't interpolated, so a teleport doesn't slide.
+
+A mod's per-tick code runs only on tick frames; it must not depend on how many frames are drawn.
+
+### Music
+
+The game plays music as CD audio by track number: `CD_PlayTrack(n)` sends `play cdaudio from n+1 to n+2`, so a level's Music object asking for n plays disc track n+1. Lomax+ answers every `cdaudio` command from files (see [CD music](#cd-music)):
+
+- **Search order.** A track nn is looked for as `MUSIC\TRACKnn.*` in the game folder, then in each mod's `MODS\<name>\MUSIC`, in the order the mods' folders are listed. The first file found plays.
+- **Track numbers.** Lomax's disc has tracks 2–26. A mod adds tracks under numbers of its own, so that it doesn't replace Lomax's music and doesn't clash with another mod's; a mod that ships a track with a number the game's `MUSIC` already has is never heard.
+- **File names and formats.** The name is `TRACK` and the disc track number with at least two digits (`TRACK02.WAV`, `TRACK112.WAV`). In each folder the extensions are tried in the order `WAV`, `FLAC`, `MP3`, `OGG`, `M4A`, `WMA`; WAV is read directly, the others through Media Foundation (OGG only with its codec installed). A file that can't be opened is logged and the next one is tried. Every file must decode to 44.1 kHz, 16-bit stereo.
+- **Availability.** A music folder counts only if it holds at least one `TRACK*.*` file. Up to 16 folders are used (the game's `MUSIC` and 15 mods'); the log names each one (`music: CD tracks from …`). Mod tracks alone are enough to turn music on, so a mod's music plays even without Lomax's extracted tracks.
+- **Looping, pause, volume** work as with Lomax's tracks: the end of a track posts `MM_MCINOTIFY` and the game restarts it, pause and resume seek in the file, and the Music volume and fades apply.
+
+### Settings and logging
+
+Lomax+ shows no settings for mods. A mod keeps its settings itself (a file in its folder, or its own registry key). It can read Lomax+'s from `HKCU\Software\Psygnosis\Lomax` (REG_DWORD; a missing value means the default in [Display settings](#display-settings-properties--system) and [Extra settings](#extra-settings-properties--extra)):
+
+| Value | Key | Use for a mod |
+|---|---|---|
+| `Widescreen`, `WidescreenWidth` | `System` | The screen width W: 0 = 320, 1 = 432, 2 = 512, 3 = `WidescreenWidth` rounded to a multiple of 16 and kept in 320–512. |
+| `FPSOverride`, `FPS`, `VSync` | `System` | Whether in-between frames are drawn. |
+| `Speed50Hz` | `Extra` | 50 ticks per second instead of 60. |
+| `Log` | `Extra` | Lomax+'s debug log switch. A mod can follow it for its own log. |
+
+These are the values at the time the mod reads them; Widescreen, VSync, FPS Override and 50Hz Mode take effect only at the next start, so a mod reading them in `DllMain` sees what the running session uses.
+
+`LOADER.LOG` is Lomax+'s own; mods can't write to it. It lists each mod and whether it loaded (`mod <name>: loaded`), every music folder, and every hook Lomax+ installed with its address, which tells a mod author what is patched in a given configuration. A mod writes its own log in its folder.
 
 ## Known limitations
 

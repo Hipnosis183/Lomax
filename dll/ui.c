@@ -461,6 +461,7 @@ static void sys_page_init(void)
      Cheats                                     the built-in cheat keys (applied at once)
      RGBEmulation, FastBlit, Transparency       transparency 0 auto, 1 solid, 2 dither, 3 blend
      Log                                        LOADER.LOG (applied at once)
+     Mod (a string)                             the mod to load (its folder name, "" = None; next start)
      DemoTrace, Mute                            testing aids, not on the page
    The page is added when the game's sheet ("Lomax Properties", System + Controls) reaches
    PropertySheetA: MFC passes its pages as a PROPSHEETPAGE array (PSH_PROPSHEETPAGE), so a copy gets
@@ -475,12 +476,13 @@ static void sys_page_init(void)
 #define IDC_EXTRA_FASTBLIT       1205
 #define IDC_EXTRA_TRANSP         1206
 #define IDC_EXTRA_LOG            1207
+#define IDC_EXTRA_MOD            1208
 static const int kTranspMode[4] = { TRANSP_AUTO, TRANSP_SOLID, TRANSP_DITHER, TRANSP_BLEND };   /* by value */
 static const char *const kTranspNames[4] = { "Automatic", "Solid", "Dither", "Blend" };
 static const char *const kExtraNames[10] = { "LoadingScreen", "LanguageSelect", "Speed50Hz", "Cheats",
                                              "RGBEmulation", "FastBlit", "Transparency", "Log",
                                              "DemoTrace", "Mute" };
-static DWORD g_extraTpl[256];                  /* the page's dialog template */
+static DWORD g_extraTpl[512];                  /* the page's dialog template */
 
 /* as saved in the registry */
 static struct {
@@ -549,8 +551,9 @@ static WORD *tpl_item(WORD *p, WORD cls, DWORD style, int x, int y, int cx, int 
     return p;
 }
 
+#define EXTRA_ITEMS              14
 /* the page's controls in dialog units (the game's margins), in tab order */
-static const struct { WORD cls; DWORD style; short x, y, cx, cy; int id; const char *text; } kExtraItems[12] = {
+static const struct { WORD cls; DWORD style; short x, y, cx, cy; int id; const char *text; } kExtraItems[EXTRA_ITEMS] = {
     { 0x80, BS_GROUPBOX,               PAGE_BOX_L,   7, PAGE_BOX_R - PAGE_BOX_L, 53, -1, "Game" },
     { 0x80, WS_TABSTOP | BS_AUTOCHECKBOX,                16,  23,  70, 10, IDC_EXTRA_LOADSCREEN, "Loading Screen" },
     { 0x80, WS_TABSTOP | BS_AUTOCHECKBOX,               102,  23,  75, 10, IDC_EXTRA_LANGSELECT, "Language Select" },
@@ -561,8 +564,10 @@ static const struct { WORD cls; DWORD style; short x, y, cx, cy; int id; const c
     { 0x80, WS_TABSTOP | BS_AUTOCHECKBOX,               102,  82,  75, 10, IDC_EXTRA_FASTBLIT, "Fast Blit" },
     { 0x82, WS_GROUP | SS_LEFT,                          16,  98,  60,  8, -1, "Transparency" },
     { 0x85, WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,  16, 108,  78, 60, IDC_EXTRA_TRANSP, "" },
-    { 0x80, BS_GROUPBOX,               PAGE_BOX_L, 134, PAGE_BOX_R - PAGE_BOX_L, 33, -1, "Other" },
-    { 0x80, WS_TABSTOP | BS_AUTOCHECKBOX,                16, 150,  80, 10, IDC_EXTRA_LOG, "Loader Debug Log" },
+    { 0x80, BS_GROUPBOX,               PAGE_BOX_L, 134, PAGE_BOX_R - PAGE_BOX_L, 43, -1, "Other" },
+    { 0x82, WS_GROUP | SS_LEFT,                          16, 146,  60,  8, -1, "Load Mod" },
+    { 0x85, WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST,  16, 156,  78, 80, IDC_EXTRA_MOD, "" },
+    { 0x80, WS_TABSTOP | BS_AUTOCHECKBOX,               102, 158,  80, 10, IDC_EXTRA_LOG, "Loader Log" },
 };
 
 static void extra_template(void)
@@ -572,7 +577,7 @@ static void extra_template(void)
     int i;
     d->style = WS_CHILD | WS_DISABLED | WS_CAPTION | DS_SETFONT;
     d->dwExtendedStyle = 0;
-    d->cdit = 12;
+    d->cdit = EXTRA_ITEMS;
     d->x = d->y = 0; d->cx = 195; d->cy = SYS_DLG_HEIGHT;
     p = (WORD *)(d + 1);
     *p++ = 0;                                   /* no menu */
@@ -580,7 +585,7 @@ static void extra_template(void)
     p = tpl_str(p, "Extra");
     *p++ = 8;
     p = tpl_str(p, "MS Sans Serif");
-    for (i = 0; i < 12; i++)
+    for (i = 0; i < EXTRA_ITEMS; i++)
         p = tpl_item(p, kExtraItems[i].cls, kExtraItems[i].style, kExtraItems[i].x, kExtraItems[i].y,
                      kExtraItems[i].cx, kExtraItems[i].cy, kExtraItems[i].id, kExtraItems[i].text);
 }
@@ -594,11 +599,49 @@ static void extra_match_font(HWND h)
     int i = 0;
     if (!f) return;
     SendMessageA(h, WM_SETFONT, (WPARAM)f, FALSE);
-    for (c = GetWindow(h, GW_CHILD); c && i < 12; c = GetWindow(c, GW_HWNDNEXT), i++) {
+    for (c = GetWindow(h, GW_CHILD); c && i < EXTRA_ITEMS; c = GetWindow(c, GW_HWNDNEXT), i++) {
         SendMessageA(c, WM_SETFONT, (WPARAM)f, FALSE);
         place_dlu(sys, c, kExtraItems[i].x, kExtraItems[i].y, kExtraItems[i].x + kExtraItems[i].cx,
                   kExtraItems[i].y + kExtraItems[i].cy);
     }
+}
+
+/* ---- Load Mod: None, then the mods found at the start (g_mods, by name); the item data is the
+   index in g_mods + 1. The mod chosen (registry Extra\Mod) runs from the next start; one that isn't
+   listed (its folder gone) shows None. ---- */
+static char g_modSaved[MOD_FOLDER_LEN];        /* Extra\Mod as last saved */
+
+static void mod_list_fill(HWND h)
+{
+    int i, sel = 0, at;
+    if (!g_modSaved[0] && g_modChosen[0]) snprintf(g_modSaved, sizeof(g_modSaved), "%s", g_modChosen);
+    SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_RESETCONTENT, 0, 0);
+    at = (int)SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_ADDSTRING, 0, (LPARAM)"None");
+    SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_SETITEMDATA, at, 0);
+    for (i = 0; i < g_nMods; i++) {
+        at = (int)SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_ADDSTRING, 0, (LPARAM)g_mods[i].name);
+        SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_SETITEMDATA, at, i + 1);
+        if (g_modSaved[0] && !_stricmp(g_mods[i].folder, g_modSaved)) sel = at;
+    }
+    SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_SETCURSEL, sel, 0);
+}
+
+/* saves the choice; 1 when it differs from the mod running now (a restart needed) */
+static int mod_list_save(HWND h)
+{
+    int sel = (int)SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_GETCURSEL, 0, 0), i;
+    const char *folder = "";
+    HKEY k;
+    if (sel < 0) return 0;
+    i = (int)SendDlgItemMessageA(h, IDC_EXTRA_MOD, CB_GETITEMDATA, sel, 0);
+    if (i > 0 && i <= g_nMods) folder = g_mods[i - 1].folder;
+    if ((k = reg_open("Extra", KEY_SET_VALUE)) != NULL) {
+        reg_set_str(k, "Mod", folder);
+        RegCloseKey(k);
+    }
+    snprintf(g_modSaved, sizeof(g_modSaved), "%s", folder);
+    if (_stricmp(folder, g_modRunning)) log_msg("mod: %s chosen, from the next start", folder[0] ? folder : "None");
+    return _stricmp(folder, g_modRunning) != 0;
 }
 
 /* ---- the page ---- */
@@ -615,6 +658,7 @@ static INT_PTR CALLBACK extra_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         for (i = 0; i < 7; i++) CheckDlgButton(h, kChecks[i].id, *kChecks[i].v ? BST_CHECKED : BST_UNCHECKED);
         for (i = 0; i < 4; i++) SendDlgItemMessageA(h, IDC_EXTRA_TRANSP, CB_ADDSTRING, 0, (LPARAM)kTranspNames[i]);
         SendDlgItemMessageA(h, IDC_EXTRA_TRANSP, CB_SETCURSEL, g_extra.transp, 0);
+        mod_list_fill(h);
         extra_match_font(h);
         return TRUE;
     }
@@ -624,6 +668,7 @@ static INT_PTR CALLBACK extra_proc(HWND h, UINT msg, WPARAM w, LPARAM l)
         t = (int)SendDlgItemMessageA(h, IDC_EXTRA_TRANSP, CB_GETCURSEL, 0, 0);
         if (t >= 0 && t <= 3) g_extra.transp = t;
         extra_save();
+        if (mod_list_save(h)) restart_note_post();
         if (g_extra.cheats != cheats) *G_BCHEATSENABLED = g_extra.cheats;    /* at once */
         if (g_extra.log != cfg.log) {
             cfg.log = g_extra.log;

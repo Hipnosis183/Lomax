@@ -4,7 +4,7 @@
 
 ![](/lomax.png)
 
-For disclosure, this project has been vibecoded for the most part, I just planned the features and reviewed the code implementation; everything has been manually tested and refined.
+For disclosure, this project is AI-assisted: a coding agent wrote most of the code, I just planned the features and reviewed the code implementation; everything has been manually tested and refined.
 
 ### Features
 
@@ -29,6 +29,7 @@ For disclosure, this project has been vibecoded for the most part, I just planne
   - Restore the language select screen from the console version.
   - Restore the 50Hz display mode from the console version.
   - Enable the in-game cheat mode.
+  - Mods support.
 
 ### Setup
 

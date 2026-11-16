@@ -198,7 +198,8 @@ static void pan_fix(void)
 
    The disc is never used: every "cdaudio" command is answered here instead of by MCI. With
    MUSIC\TRACKnn.* files (nn = disc track, as extracted by LOADER.EXE) a thread plays the track file through
-   waveOut. WAV (44.1 kHz 16-bit stereo) is read directly; other formats (FLAC, MP3, and OGG when
+   waveOut. The running mod's MODS\<name>\MUSIC folder is searched after MUSIC, so a mod can add tracks under
+   numbers the disc doesn't have (its Music objects ask for them like any other track). WAV (44.1 kHz 16-bit stereo) is read directly; other formats (FLAC, MP3, and OGG when
    its codec is installed) go through Media Foundation, loaded only when needed. At the end of a
    track the same MM_MCINOTIFY is posted, so the game's own looping, pause and resume work as with
    the disc. CDAudio_SetVolume becomes a software gain on the samples. Without the files there is no
@@ -212,7 +213,11 @@ static void pan_fix(void)
 typedef void (__cdecl *SetVolume_t)(int);
 static SetVolume_t oCDSetVolume;
 static int  g_musLocal;                       /* local music active */
-static char g_musDir[MAX_PATH];
+/* folders searched for TRACKnn.* in order: MUSIC, then the running mod's MODS\<name>\MUSIC. A mod adds
+   tracks under numbers of its own (Lomax's disc has 2-26), which its levels' Music objects play. */
+#define MUS_MAX_DIRS 16
+static char g_musDirs[MUS_MAX_DIRS][MAX_PATH];
+static int  g_musNDirs;
 
 /* decoder: WAV directly, anything else through Media Foundation (IMFSourceReader -> PCM) */
 typedef struct {
@@ -309,20 +314,25 @@ static int mf_open(MusDec *d, const char *path)
     return ok;
 }
 
-/* opens MUSIC\TRACKnn.* for disc track n */
+/* opens TRACKnn.* for disc track n, from the first music folder that has it */
 static int dec_open(MusDec *d, int track)
 {
     static const char *const exts[] = { "WAV", "FLAC", "MP3", "OGG", "M4A", "WMA" };
     char path[MAX_PATH];
     size_t i;
+    int k;
     memset(d, 0, sizeof(*d));
-    for (i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
-        snprintf(path, sizeof(path), "%s\\TRACK%02d.%s", g_musDir, track, exts[i]);
-        if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
-        if (i == 0 ? wav_open(d, path) : mf_open(d, path)) return 1;
-        log_msg("music: could not open %s", path);
-        dec_close(d);
-    }
+    for (k = 0; k < g_musNDirs; k++)
+        for (i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+            snprintf(path, sizeof(path), "%s\\TRACK%02d.%s", g_musDirs[k], track, exts[i]);
+            if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) continue;
+            if (i == 0 ? wav_open(d, path) : mf_open(d, path)) {
+                log_msg("music: track %d is %s", track, path);
+                return 1;
+            }
+            log_msg("music: could not open %s", path);
+            dec_close(d);
+        }
     return 0;
 }
 
@@ -439,7 +449,7 @@ static DWORD WINAPI music_thread(void *arg)
                     LeaveCriticalSection(&g_musLock);
                     playing = 1;
                 } else {
-                    log_msg("music: no file for track %d in %s", track, g_musDir);
+                    log_msg("music: no file for track %d", track);
                 }
             }
         }
@@ -520,23 +530,37 @@ static void __cdecl hkCDSetVolume(int vol)
     g_musGain = (LONG)(65536.0 * log((vol & 0xFF) / 255.0 + 1.0) / log(2.0));
 }
 
-static void music_init(void)
+/* adds dir to the music folders if it has TRACKnn files */
+static void music_add_dir(const char *dir)
 {
     char pat[MAX_PATH];
     WIN32_FIND_DATAA fd;
     HANDLE h;
-    snprintf(g_musDir, sizeof(g_musDir), "%s\\MUSIC", g_gameDir);
-    snprintf(pat, sizeof(pat), "%s\\TRACK??.*", g_musDir);
-    if ((h = FindFirstFileA(pat, &fd)) == INVALID_HANDLE_VALUE) {
-        log_msg("music: no TRACKnn files in %s, no music (the disc is not used)", g_musDir);
+    snprintf(pat, sizeof(pat), "%s\\TRACK*.*", dir);
+    if ((h = FindFirstFileA(pat, &fd)) == INVALID_HANDLE_VALUE) return;
+    FindClose(h);
+    if (g_musNDirs == MUS_MAX_DIRS) { log_msg("music: more than %d music folders, %s left out", MUS_MAX_DIRS, dir); return; }
+    snprintf(g_musDirs[g_musNDirs++], MAX_PATH, "%s", dir);
+    log_msg("music: CD tracks from %s", dir);
+}
+
+static void music_init(void)
+{
+    char dir[MAX_PATH];
+    snprintf(dir, sizeof(dir), "%s\\MUSIC", g_gameDir);
+    music_add_dir(dir);
+    if (g_modRunning[0]) {
+        snprintf(dir, sizeof(dir), "%s\\MODS\\%s\\MUSIC", g_gameDir, g_modRunning);
+        music_add_dir(dir);
+    }
+    if (!g_musNDirs) {
+        log_msg("music: no TRACKnn files in MUSIC or MODS\\<name>\\MUSIC, no music (the disc is not used)");
         return;
     }
-    FindClose(h);
     InitializeCriticalSection(&g_musLock);
     g_musEvent = CreateEventA(NULL, FALSE, FALSE, NULL);
     hkCDSetVolume(*G_CFGCDVOLUME * 255 / 100);
     g_musLocal = 1;
-    log_msg("music: playing CD tracks from %s", g_musDir);
 }
 
 /* ---- CD check: the disc is never needed ------------------------------------------------- */
@@ -553,7 +577,7 @@ static MCIERROR WINAPI hkMciSendStringA(LPCSTR cmd, LPSTR ret, UINT len, HWND cb
 static int __cdecl hkVerifyDisc(void)
 {
     *G_BCDAUDIOAVAILABLE = g_musLocal;           /* 0: all CD_* functions do nothing */
-    log_msg("CD: disc not needed, %s", g_musLocal ? "music from the MUSIC folder" : "no music files: no music");
+    log_msg("CD: disc not needed, %s", g_musLocal ? "music from the music folders" : "no music files: no music");
     return 1;
 }
 

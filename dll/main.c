@@ -46,6 +46,11 @@
  *   FastBlit     - the sprite queue is copied by our own loop instead of one DirectDraw Blt per
  *                  sprite (far faster on emulated 16-bit DirectDraw).
  *   Extra page   - loading screen, language menu, PAL timing, cheats, the fixes above, the log.
+ *   Mods         - each folder MODS\<name> with <name>.DLL and <name>.INI is a mod, listed on the
+ *                  Extra page (Load Mod). The one chosen there runs from the next start: its DLL
+ *                  is loaded after the hooks are installed (load_mod), and its MUSIC folder adds
+ *                  CD tracks (audio.c). A mod missing a file it needs is not loaded (a message
+ *                  box says which). A mod does its own patching; Lomax+ only loads it.
  *
  * Build (MSYS2 mingw32): see build.bat.
  */
@@ -179,6 +184,21 @@ void reg_set_int(HKEY k, const char *name, int v)
     RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&d, sizeof(d));
 }
 
+/* REG_SZ values: s is "" when the value is missing or isn't a string */
+int reg_get_str(HKEY k, const char *name, char *s, DWORD size)
+{
+    DWORD type, n = size - 1;
+    s[0] = 0;
+    if (RegQueryValueExA(k, name, NULL, &type, (BYTE *)s, &n) || type != REG_SZ) { s[0] = 0; return 0; }
+    s[n < size ? n : size - 1] = 0;
+    return 1;
+}
+
+void reg_set_str(HKEY k, const char *name, const char *s)
+{
+    RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)s, (DWORD)strlen(s) + 1);
+}
+
 /* window subclassing: the previous procedure is kept in the window property prop; subclass_next
    calls it and, at WM_NCDESTROY, puts it back */
 void subclass(HWND h, const char *prop, WNDPROC proc)
@@ -194,6 +214,131 @@ LRESULT subclass_next(HWND h, const char *prop, UINT msg, WPARAM w, LPARAM l)
         if (old) SetWindowLongPtrA(h, GWLP_WNDPROC, (LONG_PTR)old);
     }
     return old ? CallWindowProcA(old, h, msg, w, l) : DefWindowProcA(h, msg, w, l);
+}
+
+/* ---- mods ------------------------------------------------------------------------------------
+   A mod is a folder MODS\<folder> holding <folder>.DLL and <folder>.INI, whose [Lomax] section
+   names it (Name, shown on the Extra page's Load Mod list; Author, Description) and may list the
+   other files it needs (Files, paths in the mod's folder separated by commas). At most one mod
+   runs: the one chosen on the Extra page (registry Extra\Mod, its folder name; "" or missing =
+   None), from the next start. mods_init scans MODS for the list and checks the chosen mod's
+   files; with any missing it says so in a message box and the game starts without the mod.
+   load_mod then loads its DLL (which patches what it needs from DllMain). */
+ModInfo g_mods[MOD_MAX];
+int     g_nMods;
+char    g_modChosen[MOD_FOLDER_LEN];
+char    g_modRunning[MOD_FOLDER_LEN];
+
+static int file_exists(const char *path)
+{
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* MODS\<folder>\<folder>.<ext> */
+static void mod_file(char *out, size_t size, const char *folder, const char *ext)
+{
+    snprintf(out, size, "%s\\MODS\\%s\\%s.%s", g_gameDir, folder, folder, ext);
+}
+
+static void mods_scan(void)
+{
+    char pattern[MAX_PATH], dll[MAX_PATH], ini[MAX_PATH];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    int i, j;
+    snprintf(pattern, sizeof(pattern), "%s\\MODS\\*", g_gameDir);
+    if ((h = FindFirstFileA(pattern, &fd)) == INVALID_HANDLE_VALUE) return;
+    do {
+        ModInfo *m;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+        if (strlen(fd.cFileName) >= MOD_FOLDER_LEN) { log_msg("mod %s: folder name too long, skipped", fd.cFileName); continue; }
+        mod_file(dll, sizeof(dll), fd.cFileName, "DLL");
+        mod_file(ini, sizeof(ini), fd.cFileName, "INI");
+        if (!file_exists(dll) || !file_exists(ini)) {
+            log_msg("mod %s: no %s.DLL or %s.INI in it, not listed", fd.cFileName, fd.cFileName, fd.cFileName);
+            continue;
+        }
+        if (g_nMods == MOD_MAX) { log_msg("mod %s: more than %d mods, not listed", fd.cFileName, MOD_MAX); continue; }
+        m = &g_mods[g_nMods++];
+        snprintf(m->folder, sizeof(m->folder), "%s", fd.cFileName);
+        GetPrivateProfileStringA("Lomax", "Name", "", m->name, sizeof(m->name), ini);
+        if (!m->name[0]) snprintf(m->name, sizeof(m->name), "%s", fd.cFileName);
+        log_msg("mod %s: listed as \"%s\"", m->folder, m->name);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (i = 1; i < g_nMods; i++)                /* by name */
+        for (j = i; j > 0 && _stricmp(g_mods[j - 1].name, g_mods[j].name) > 0; j--) {
+            ModInfo t = g_mods[j]; g_mods[j] = g_mods[j - 1]; g_mods[j - 1] = t;
+        }
+}
+
+/* the chosen mod's missing files, one per line, into miss ("" when it has them all) */
+static void mod_missing(const char *folder, char *miss, size_t size)
+{
+    char path[MAX_PATH], ini[MAX_PATH], files[1024], *f;
+    size_t n = 0;
+    miss[0] = 0;
+    snprintf(path, sizeof(path), "%s\\MODS\\%s", g_gameDir, folder);
+    if (!file_exists(path)) { snprintf(miss, size, "  MODS\\%s\n", folder); return; }
+    mod_file(path, sizeof(path), folder, "DLL");
+    if (!file_exists(path)) n += snprintf(miss + n, size - n, "  MODS\\%s\\%s.DLL\n", folder, folder);
+    mod_file(ini, sizeof(ini), folder, "INI");
+    if (!file_exists(ini)) { n += snprintf(miss + n, size - n, "  MODS\\%s\\%s.INI\n", folder, folder); return; }
+    GetPrivateProfileStringA("Lomax", "Files", "", files, sizeof(files), ini);
+    for (f = strtok(files, ",;"); f && n < size; f = strtok(NULL, ",;")) {
+        char *e;
+        while (*f == ' ' || *f == '\t') f++;
+        for (e = f + strlen(f); e > f && (e[-1] == ' ' || e[-1] == '\t'); ) *--e = 0;
+        if (!*f) continue;
+        snprintf(path, sizeof(path), "%s\\MODS\\%s\\%s", g_gameDir, folder, f);
+        if (!file_exists(path)) n += snprintf(miss + n, size - n, "  MODS\\%s\\%s\n", folder, f);
+    }
+}
+
+/* The message when the chosen mod can't be loaded (its files missing, or its DLL failing to load);
+   the details go to the log only. The choice goes back to None (registry Extra\Mod ""), so the
+   message comes once, not at every start. */
+static void mod_failed(const char *name)
+{
+    char msg[MOD_NAME_LEN + 128];
+    HKEY k = reg_open("Extra", KEY_SET_VALUE);
+    if (k) { reg_set_str(k, "Mod", ""); RegCloseKey(k); }
+    g_modChosen[0] = 0;
+    log_msg("mod: choice reset to None");
+    snprintf(msg, sizeof(msg), "The selected mod \"%s\" couldn't be loaded. "
+             "Lomax will start normally without any mods loaded.", name);
+    MessageBoxA(NULL, msg, "Lomax+", MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+}
+
+static void mods_init(void)
+{
+    char miss[2048], name[MOD_NAME_LEN], ini[MAX_PATH];
+    HKEY k = reg_open("Extra", KEY_QUERY_VALUE);
+    if (k) { reg_get_str(k, "Mod", g_modChosen, sizeof(g_modChosen)); RegCloseKey(k); }
+    mods_scan();
+    if (!g_modChosen[0]) { log_msg("mod: None"); return; }
+    mod_missing(g_modChosen, miss, sizeof(miss));
+    if (miss[0]) {
+        mod_file(ini, sizeof(ini), g_modChosen, "INI");
+        GetPrivateProfileStringA("Lomax", "Name", g_modChosen, name, sizeof(name), ini);
+        log_msg("mod %s: files missing, not loaded:\n%s", g_modChosen, miss);
+        mod_failed(name);
+        return;
+    }
+    snprintf(g_modRunning, sizeof(g_modRunning), "%s", g_modChosen);
+}
+
+static void load_mod(void)
+{
+    char path[MAX_PATH], ini[MAX_PATH], name[MOD_NAME_LEN];
+    if (!g_modRunning[0]) return;
+    mod_file(path, sizeof(path), g_modRunning, "DLL");
+    if (LoadLibraryA(path)) { log_msg("mod %s: loaded", g_modRunning); return; }
+    log_msg("mod %s: failed to load (error %lu)", g_modRunning, GetLastError());
+    mod_file(ini, sizeof(ini), g_modRunning, "INI");
+    GetPrivateProfileStringA("Lomax", "Name", g_modRunning, name, sizeof(name), ini);
+    mod_failed(name);
+    g_modRunning[0] = 0;
 }
 
 /* ---- entry point called by the loader ------------------------------------------------------ */
@@ -228,6 +373,8 @@ __declspec(dllexport) DWORD WINAPI LomaxFix_Init(LPVOID unused)
 
     if (MH_Initialize() != MH_OK) { log_msg("MH_Initialize failed"); return 3; }
 
+    mods_init();                                /* the list and the chosen mod: before audio_init */
+
     /* the order matters only where noted */
     ui_init();
     controls_init();
@@ -240,6 +387,7 @@ __declspec(dllexport) DWORD WINAPI LomaxFix_Init(LPVOID unused)
     if (!(cfg.hfrFps && hfr_init()) && cfg.vsync) vsync_init();   /* FPS Override has its own VSync */
     ws_layer_init();                            /* after hfr_init: its layer hook mirrors too */
     fastblit_init();
+    load_mod();
     log_msg("init done");
     return 1;
 }

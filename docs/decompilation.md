@@ -154,6 +154,12 @@ Movement details:
 
 - **Level table:** `g_LevelDefs[24]` at 0x466450, 0x18 bytes per row. Rows 21, 22 and 23 are the bonus level, map and title. `g_WldFileNames` lists MAIN, LOGO, TITLE, MAP, BONUS, ED and the other WLD files.
 - **Level state:** `g_CurSection`, `g_CurSubLevel` and `g_LoadedSection`. Game_SetupNextLevel picks where to go next from `g_bGoToTitle`, `g_bGoToMap`, `g_bDemoMode` and `g_bBonusTrapdoorOpen`, with `g_bSectionChangePending` set when the section changes.
+- **Level flow:**
+  - A level starts at its `Start` trapdoor (object 0, placement flag 0x4000; `Trapdoor_Init` 0x42A820). Lomax comes out at the trapdoor's y − 40 and drops; Lomax's levels hang it 72–98 px above the floor.
+  - A sub-level ends at an `Exit` (object 2, `LevelExit_Update` 0x4276A0). It fires when Lomax is on the ground on its plane, within 48 px of its height, and past the map's right end − 50 px; it sets `g_bLevelExitReached` and fades out 30 ticks later.
+  - `Level_Start` then advances `g_CurSubLevel` and reloads the world (`Level_LoadWorld`), and the next sub-level's Start trapdoor stays hidden while Lomax walks in from x = −100.
+  - The last sub-level ends at a `Finish` trapdoor (object 1): Up within 32 px, standing up to 120 px below it. The "level complete" banner (`Insert_Show(4)`) counts up `g_LastRealSection` and goes to the map, which leaves for that section.
+- **Level table references:** the code reaches `g_LevelDefs` only through 28 field addresses (0x466450–0x46645E) and indexes it by section. Sections are numbered only in `Game_SetupNextLevel` (title 0x17, bonus 0x15, map 0x16, sections from 0x18 reset to 0), the password check (section < 0x16, 5 bits kept) and the F1 level select (wraps at 0x16). So the table can be moved to a larger copy to add rows by rewriting those 28 field references.
 - **Level timer quirk:** `g_LevelTimerSavedTicks` is read but never written, so the "restore saved timer" path always gets 0.
 - **Game flow:** Game_ResetNewGame (0x40edc0), Game_SetupNextLevel (0x417bd0), Level_LoadWorld (0x40eb80), Level_InitPlanes and Level_Start (0x40f670).
 - **WLD loader:** World_LoadWLD (0x4147e0) reads chunks in this order:
@@ -168,6 +174,64 @@ Movement details:
   - `END`
 
   The full format is in the World_LoadWLD plate comment.
+- **WLD details** (confirmed by writing WLD files that the game loads):
+  - **Chunk sizes:** every size must be a multiple of 4. `File_ReadChunk` (0x416A70) advances its pointer by `size & ~3` but its byte count by `size`.
+  - **TTAB:** stored big-endian. The `MAP` handler byte-swaps both the tile words and the plane's whole TTAB (`Plane_ByteSwapMapAndCheckEmpty`, 0x415430).
+  - **HEAD layout:** `u32` width and `u32` height in 8 px units (BE); 10 palettes × 256 colours (LE); 0x50 bytes of editor data (`0xFF`); a 256-bit ANIM bitmap at +0x1458.
+    - Colours are 15-bit with blue in bits 0–4 and red in bits 10–14. Colour 0 becomes the transparent key: white, with real white moved to 0x7FFE.
+  - **Palettes:** only HEADs whose plane bit is in `activePlaneMask` load palettes, into the shared DIB blocks at 0x471B28. Every plane's tiles are built from the last ones loaded.
+  - **Tile palette:** `Plane_BuildTileSurfaces` draws a 16×16 tile with one palette, the last non-zero cell's. All shipped tiles use palette 0.
+  - **Cells and tiles:** cell 0 and tile 0 are empty.
+  - **Collision byte:** one byte per map cell, with these bits:
+    - `(b & 0xC0) == 0xC0` is a one-way floor: bits 4–5 are the shape, bit 3 mirrors it, bits 0–2 are the material.
+    - `0x80` is a solid block: `0x08` blocks from below, `0x10` blocks moving left, `0x20` blocks moving right (`Actor_CheckWallCollision` 0x412F50).
+  - **GNMY:** the first word of an entry is the entry's size in bytes.
+- **Level rows:** `g_LevelDefs` rows say which planes of the world file a level uses.
+  - `dwPlaneMask` selects planes by HEAD number. The loaded planes become `g_Planes[0..n-1]`, in file order.
+  - `aSubLevelPlaneMask[k]` selects among those planes. Its bit *i* is the *i*-th plane of `dwPlaneMask`.
+  - `g_WldFileNames` (0x466690) is MEDIEVAL, VILLAGE, HAUNTED, WEST, ED, BONUS, MAP, TITLE, LOGO, MAIN.
+- **Plane order:** `Planes_UpdateDepth` gives the shown planes buckets 0x90, 0x40, 0x20, 0x10 (table 0x464B28), in order. The sprite queue draws bucket 0 first, so the first plane is in front.
+  - The bucket also gates sound: `Sound_PlayEffect` (0x40D5F0) plays a positional sound only when its source's plane bucket is 0x4D..0xB0, at volume × min(bucket, 0x90) / 0x90. A play plane that isn't first (bucket 0x40) is silent.
+  - Actors go into bucket plane depth + `{3,4,8,10,12,14,6,2}[nDrawLayer]` (0x464B48; the player uses layer 6).
+  - The player starts on the plane holding the `Start` object (Level_InitPlanes, `g_StartPlane` 0x52C540).
+- **Background scroll:** a plane that isn't the player's moves only through a `ScrollMap` object (type 87, `ParallaxPlane_Spawn` 0x42B670) placed on it.
+  - Its 7 parameters are: X auto-scroll, X factor %, Y auto-scroll, Y factor %, X offset, Y offset, and a section/sub-level id. The id is used only when the placement's checkbox bit is set.
+  - The `Parallax` objects are screen-space backdrop sprites, not planes.
+- **Object spawning:** `Objects_SpawnNearCamera` (0x412450) spawns a placement only when it is inside the camera window plus a margin (x 80/160/340/340 and y 80/110/140/140 px, by the record's spawn phase) and outside the screen plus 40 px. So objects appear from just outside the screen, and never directly on it. A teleport skips everything already in view.
+- **Type names:** the game copies an NMY type name into a 0x20-byte block at +4, then writes the type's fields from +0x14 (+0x16 behaviour, +0x18 parameter count, +0x1A checkbox count). Characters past 15 are overwritten, and past 27 they spill into the next allocation.
+- **Moving platform** ("Mega", object 64, `MovingPlatform_Spawn` 0x429A90): the moving platform object.
+  - Fields: base x/y at +0x98/+0x9C (the sine path is around them; the elevator mode returns up to +0x9C), +0xA8 elevator mode.
+  - Landing (`Platform_MoveAndCarryPlayer` 0x413510): Lomax's x strictly inside the 'MAIN' hitbox x1..x2, his feet at the tick's start at or above the platform's previous top and the new top at or above his next feet. So he can't walk onto a platform whose top is above the floor he walks on.
+  - Params: X amplitude, Y amplitude, X phase speed, Y phase speed, and the spacing of the 'PART' chain drawn down to the screen bottom.
+  - Flags: 1 = not always moving; 2 = moves after being stood on, or returns up when combined with 4; 4 = sinks while stood on, at Y speed × 0x28F per tick; 8 = bobs.
+  - Position: base + amplitude·sin(phase)/2, with the phase advancing by the speed each tick (1024 per turn).
+  - The standing surface is the 'MAIN' record's hitbox x1..x2 at y + y1 (`Platform_MoveAndCarryPlayer` 0x413510; `g_pRidingPlatform` 0x59C744).
+- **Rotating platforms** ("Rota", object 21, `Rota_RotatingPlatforms_Init` 0x41F180): a wheel of platforms.
+  - Params: radius in px, platform count, speed, and start phase. The phase advances by speed × 16 each tick, and angle = phase / 16, out of 1024.
+  - Flag 2: it turns only while ridden, ramping by 1 phase unit per tick.
+  - The platforms are child actors with the 'TREE' record. The spokes are drawn from 'RING' and 'BLAD' (two frames) by `Draw_RopeSegments`.
+- **Swing** ("Swin", object 46, `Swin_Swing_Init` 0x425780): a pendulum hanging from (x, y − length).
+  - Params: length, speed, swing strength, arms, pre-run.
+  - Each tick (`Swin_Swing_Update` 0x4259B0) the angular speed changes by the strength. The strength's sign flips once |speed| passes the speed param.
+  - The phase adds the speed: 16 units per step, 1024 steps per turn. Pre-run runs that many ticks at spawn.
+  - Records: 'TREE' is the platform (the actor itself); 'RING' and 'BLAD' (two frames) are the rope.
+  - With arms ≥ 1 the platform tilts with the angle (`Swin_Swing_GetSurfaceHeight`) and two ropes are drawn.
+  - The first landing pushes the swing by the player's speed.
+- **Ropes and spokes** (`Draw_RopeSegments` 0x425D40, used by the swing "Swin" 46 and the wheel "Rota" 21): a 'RING' sprite every 8 px along the rope, plus 'BLAD' leaves (two frames) at random 20–51 px steps.
+- **Water** ("Wate", object 81, `Water_Init` 0x4317F0, `Water_Update` 0x431A20, `Water_Draw` 0x431D80):
+  - Position: the surface (`g_WaterLevelY` 0x59F1C4) is the placement's y − 20.
+  - Drawing: `Water_Draw` tiles 6 strips of 64 px across the screen, from 12 cached frames each of 'WAV1' (front) and 'WAV2' (back), one frame per 4 ticks, plus 'WAV3' (the surface strip) and an optional 'BACK'. With fewer than 12 frames, the missing ones are read as garbage.
+  - Effects: splashes ('SPLA', 'SPL2'), the sink splash ('SPL3'), droplets ('SPL4') and bubbles ('BUBL') are actors of the type named exactly "Water" (`Actor_AllocHigh(…, "Water")`). An animation missing from that type crashes `Actor_Draw`.
+  - Drowning: once the player's feet are 32 px under the surface, he sinks and the level ends (`g_bLevelEnding`).
+    - The exception is while `g_WaterEscapeTimer` (0x59E95C) runs. Then he is held 32 px under the surface, and jump throws him out (vy −4.0).
+    - `Level_Start` sets the timer to 120 ticks. It counts down while he is in the water, and crossing back into the water zeroes it, so only the first dip is survivable.
+    - The jump-out test also needs `g_bInputLocked` (0x52C52C) clear, but every tick in the water sets it. So he only escapes by holding jump as he lands.
+    - Player state 0x200 means "in the water".
+- **Drifting boat** ("Trir", object 65, `DriftingBoat_Init` 0x432450): 'BOOT'.
+  - It bobs (vy ±0x2000, switching every 32 ticks) and rocks (0..128, drawn as a rotation of up to about 11°).
+  - When first stood on it drifts at 1 px per tick for |param| ticks, in the direction of the param's sign, then slows down.
+  - It has no wall check.
+- **Bounce pad** ("Jump", object 68, `BouncePad_Init` 0x433ED0): plays 'PAD ' while stood on. At frame min(frames − 2, 4) it launches the player: state |= 0x403, vy −6.0, hold force 0xA000.
 - **Planes:** `g_Planes[20]` at 0x49b880, 0x9C bytes each. These are scroll and depth planes, each with its tile map, collision map, placement list and zoom (750 per-mille means pre-shrunk 12x12 tiles).
 - **Console leftovers:** the language menu is complete in the PC build. It is TITLE.WLD sub-level 0 (plane 4, `LanguageMenu` → `Obj_LangSelect_*` 0x417E60/0x417F00, font `Cset` from MAIN.WLD, demo file DEMO24N1.DAT), which the port skips by entering the title at sub-level 1. MAIN.WLD also has a `Loading` object type (anims `HERO`, `UHR` = hourglass, `TEXT` = "DISC ERROR!") that no PC code references; it is the PS1 loading screen (see loader.md, Loading Screen on the Extra page). The PS1 boot logos are a separate world, `LOGOXXXX.WLD` (five 640×512 planes: three logos plus a PAL/NTSC overlay), listed as `LOGO` in the PC's `g_WldFileNames` but not shipped.
 - **Text:** GAME.TXT holds localised text (`@`, `#`, `&` markers), loaded by Text_LoadGameTxt (0x416ba0).

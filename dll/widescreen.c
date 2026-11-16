@@ -43,6 +43,7 @@ static const WsPatch kWsPatches[] = {
     P(0x0040E36B, "3d40010000",       1, 4, W_,        "Menu_OnProperties: detect 1x window"),
     P(0x0040E386, "3d80020000",       1, 4, 2, 1, 0,   "Menu_OnProperties: detect 2x window"),
     P(0x00404D7B, "c744242040010000", 4, 4, W_,        "Game_Frame: viewport clear rect right"),
+    P(0x00404F4F, "6a00",             1, 1, 0, 1, 0,   "Game_Frame: debug FPS text x (0; ws_inset_update)"),
     P(0x00404F9C, "6822010000",       1, 4, 1, 1, -30, "Game_Frame: debug world.level text x"),
     P(0x00405B2A, "3d40010000",       1, 4, W_,        "DDraw_Present: client width == screen width"),
     P(0x00405C01, "3d40010000",       1, 4, W_,        "DDraw_Present: client width == screen width"),
@@ -144,6 +145,9 @@ static const WsPatch kWsPatches[] = {
       "8b151c8f4900" "0fbf4230" "8b4a04" "85c0" "7d06" "d1f8" "8bc8" "eb0c" "3bc8" "7e02" "8bc8" "85c9" "7d02" "33c9" "894a04" "90"),
     R(0x00412330, "8d04b6c1e006",     2, 4, W_,        "Player_Update: zoom centring x*320 -> imul x*W", "69c600000000"),
     P(0x00412339, "2d40010000",       1, 4, W_,        "Player_Update: zoom centring"),
+    /* the left limit stays 16; listed so that ws_inset_update (narrowed view) writes only checked bytes */
+    P(0x004113C4, "83f910",           2, 1, 0, 1, 16,  "Player_Update: keep player within screen (16)"),
+    P(0x004113C9, "83c010",           2, 1, 0, 1, 16,  "Player_Update: keep player within screen (16)"),
     P(0x00411401, "81f930010000",     2, 4, 1, 1, -16, "Player_Update: keep player within screen (W-16)"),
     P(0x00411409, "0530010000",       1, 4, 1, 1, -16, "Player_Update: keep player within screen (W-16)"),
     P(0x00413106, "8db040010000",     2, 4, W_,        "Actor_CheckWallCollision: map right edge"),
@@ -732,7 +736,7 @@ static void __cdecl hkParallaxSpriteDraw(int *a)
     }
 }
 
-/* Narrow maps without black bars (wider than WS_BARS_MAX_TILES: the 26-tile Evil Ed arena) show their
+/* Narrow maps without black bars (WS_REPEAT_TILES: the 26-tile Evil Ed arena) show their
    tile map repeated on both sides, but collision ended at the map: the player, kept only within the
    screen (16 px from each edge), walked off the floor at Width 512 (48 px repeated on each side). The
    collision code already has a horizontal wrap, unused by the game: with bit 0x20000000 of the player
@@ -752,7 +756,79 @@ static int ws_wraps(const BYTE *plane)
     int maxScroll;
     if (!g_wsWidth || g_demo || !plane) return 0;
     maxScroll = ws_max_scroll(plane);
-    return maxScroll < 0 && maxScroll + g_wsWidth > WS_BARS_MAX_TILES * 16;
+    return maxScroll < 0 && !ws_narrowed(plane, g_wsWidth);
+}
+
+/* The narrowed view (see ws_narrowed in lomax.h): the camera centres the plane (scroll =
+   maxScroll/2), and the present covers the wrapped tiles beside it with black bars. */
+void ws_bars(int *l, int *r)
+{
+    const BYTE *plane = (const BYTE *)*G_PCURPLANE;
+    *l = *r = 0;
+    if (g_wsWidth && plane && ws_narrowed(plane, g_wsWidth)) {
+        int scroll = *(const int *)(plane + 4);
+        *l = -scroll;                                  /* plane width = maxScroll + W */
+        *r = scroll - ws_max_scroll(plane);
+        if (*l < 0) *l = 0;
+        if (*r < 0) *r = 0;
+    }
+}
+
+/* Inside the bars the screen is the plane's own width, so what keeps to the screen's edges keeps to
+   the bars' edges: Player_Update's limit, 16 px from each side (0x4113C4 / 0x411401: the player's x
+   is set to scroll + 16 or scroll + W - 16), and the HUD's edge counters (kWsHudEdges: the power
+   icon and its ammo from the left, the lives and the 1UP's target from the right; cheat mode's FPS
+   text at the bottom left, 0x404F4F, and world.level at the bottom right, 0x404F9C). Their immediates
+   are rewritten by the bars' widths whenever those change, before Player_Update (the hook) and so
+   before Hud_Draw. Bars of 0 put back what apply_widescreen wrote. Not during demos: their logic
+   follows the original layout. */
+#define FN_PLAYER_UPDATE        0x0040FB70u
+static void (__cdecl *oPlayerUpdate)(void);
+static int  g_insetL, g_insetR;
+
+static void ws_write_value(DWORD addr, int v)
+{
+    size_t i;
+    for (i = 0; i < sizeof(kWsPatches) / sizeof(kWsPatches[0]); i++)
+        if (kWsPatches[i].addr == addr) {
+            const WsPatch *p = &kWsPatches[i];
+            BYTE *imm = (BYTE *)addr + p->immOff;
+            DWORD old;
+            VirtualProtect(imm, p->immSize, PAGE_EXECUTE_READWRITE, &old);
+            if (p->immSize == 1)      *(signed char *)imm = (signed char)v;
+            else if (p->immSize == 2) *(short *)imm = (short)v;
+            else                      *(int *)imm = v;
+            VirtualProtect(imm, p->immSize, old, &old);
+            return;
+        }
+}
+
+static void ws_inset_update(void)
+{
+    int l = 0, r = 0;
+    size_t j;
+    if (!g_demo) ws_bars(&l, &r);
+    if (l > 127 - 16) l = 127 - 16;                    /* the left limit is an imm8 */
+    if (l == g_insetL && r == g_insetR) return;
+    g_insetL = l;
+    g_insetR = r;
+    ws_write_value(0x004113C4u, 16 + l);
+    ws_write_value(0x004113C9u, 16 + l);
+    ws_write_value(0x00411401u, g_wsWidth - 16 - r);
+    ws_write_value(0x00411409u, g_wsWidth - 16 - r);
+    ws_write_value(0x00404F4Fu, l);                    /* cheat mode's FPS and world.level texts */
+    ws_write_value(0x00404F9Cu, g_wsWidth - 30 - r);
+    for (j = 0; j < sizeof(kWsHudEdges) / sizeof(kWsHudEdges[0]); j++)
+        ws_write_value(kWsHudEdges[j].addr, kWsHudEdges[j].num ? g_wsWidth + kWsHudEdges[j].add - r
+                                                               : kWsHudEdges[j].add + l);
+    FlushInstructionCache(GetCurrentProcess(), NULL, 0);
+    log_msg("widescreen: narrowed view, bars %d / %d px", l, r);
+}
+
+static void __cdecl hkPlayerUpdate(void)
+{
+    ws_inset_update();
+    oPlayerUpdate();
 }
 
 static int __cdecl hkFindGroundY(BYTE *plane, int x, int y, int rows)
@@ -901,6 +977,7 @@ void ws_init(int width)
                 "ParallaxSprite_Draw");
         mh_hook(FN_ACTOR_WALL_COLLISION, hkWallCollision, (void **)&oWallCollision, "Actor_CheckWallCollision");
         mh_hook(FN_PLANE_FIND_GROUND_Y, hkFindGroundY, (void **)&oFindGroundY, "Plane_FindGroundY");
+        mh_hook(FN_PLAYER_UPDATE, hkPlayerUpdate, (void **)&oPlayerUpdate, "Player_Update");
     }
     /* no saved window size: 2x (after the widescreen patch, which checks the game's 320 default;
        ws_map_window_size widens it at the first surface init) */

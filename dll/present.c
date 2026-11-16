@@ -186,19 +186,10 @@ static void present_layout(int cw, int ch, int sw, int sh, int *dx, int *dy, int
 }
 
 /* widescreen: a level plane narrower than the screen is centred by the camera; the wrapped-around
-   tiles on both sides are hidden by black bars, l and r game pixels wide */
+   tiles on both sides are hidden by black bars, l and r game pixels wide (ws_bars, widescreen.c) */
 static void present_ws_bars(int *l, int *r)
 {
-    *l = *r = 0;
-    if (g_wsWidth && *G_PCURPLANE) {
-        const BYTE *plane = (const BYTE *)*G_PCURPLANE;
-        int maxScroll = ws_max_scroll(plane), scroll = *(const int *)(plane + 4);
-        /* plane width = maxScroll + W */
-        if (maxScroll < 0 && maxScroll + g_wsWidth <= WS_BARS_MAX_TILES * 16) {
-            *l = -scroll;
-            *r = scroll - maxScroll;
-        }
-    }
+    ws_bars(l, r);
 }
 
 static int present_gdi(void *src, const RECT *srcRect)

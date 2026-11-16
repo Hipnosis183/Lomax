@@ -484,7 +484,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     VirtualFreeEx(pi.hProcess, remote, 0, MEM_RELEASE);
     if (rc != 1)
         fail(pi.hProcess, "LOADER.DLL initialisation failed (code %lu).\n"
-                          "Turn on Loader Debug Log in Properties > Extra and check LOADER.LOG.", rc);
+                          "Turn on Loader Log in Properties > Extra and check LOADER.LOG.", rc);
 
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);

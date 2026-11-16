@@ -115,12 +115,20 @@ typedef void *(__cdecl *GetPtd_t)(void);
 typedef int   (__fastcall *PageInit_t)(BYTE *, void *);   /* an MFC page's OnInitDialog (thiscall) */
 typedef void  (__fastcall *PageOK_t)(BYTE *, void *);     /* ... and OnOK */
 
-/* black bars over the wrapped tiles of level planes up to this many tiles wide; 25 leaves the
-   Evil Ed arena (26 tiles) without bars, single-screen rooms are 20-24 */
-#define WS_BARS_MAX_TILES        25
-
 /* maxScrollX of a plane: (tiles - W/16) * 16, negative for planes narrower than the screen */
 static __inline int ws_max_scroll(const BYTE *plane) { return *(const short *)(plane + 0x30); }
+
+/* A level plane narrower than the screen gets the narrowed view: black bars over the wrapped tiles
+   on both sides, with the HUD's edge counters and the player's screen limit moved inside them
+   (ws_inset_update in widescreen.c). The one exception is this width, the Evil Ed arena (26 tiles),
+   which shows its map repeated with a solid floor (ws_wraps). Single-screen rooms are 20-24 tiles;
+   a mod's maps can be any width. */
+#define WS_REPEAT_TILES          26
+static __inline int ws_narrowed(const BYTE *plane, int width)
+{
+    int m = ws_max_scroll(plane);
+    return m < 0 && m + width != WS_REPEAT_TILES * 16;
+}
 
 /* ---- the Properties pages: their height and where their group boxes are (dialog units) ------- */
 #define SYS_DLG_HEIGHT           219           /* the System page's (dialog 102), was 175 */
@@ -149,6 +157,18 @@ extern Config cfg;
 extern char   g_gameDir[MAX_PATH];   /* LOMAX.EXE's folder */
 extern int    g_force16;             /* 16-bit emulation active (a desktop that isn't 8/16 bpp) */
 
+/* ---- mods (main.c): the MODS folder as scanned at the start, and the mod chosen on the Extra
+   page (registry Extra\Mod, its folder name). A mod is listed when MODS\<folder> holds <folder>.DLL
+   and <folder>.INI; it runs when it is the one chosen and has every file it needs. ---------------- */
+#define MOD_MAX                  32
+#define MOD_FOLDER_LEN           64
+#define MOD_NAME_LEN             64
+typedef struct { char folder[MOD_FOLDER_LEN], name[MOD_NAME_LEN]; } ModInfo;
+extern ModInfo g_mods[MOD_MAX];      /* sorted by name */
+extern int     g_nMods;
+extern char    g_modChosen[MOD_FOLDER_LEN];   /* registry Extra\Mod at the start ("" = None) */
+extern char    g_modRunning[MOD_FOLDER_LEN];  /* the mod loaded this run ("" = none) */
+
 /* ---- helpers (main.c) ---------------------------------------------------------------------- */
 void   log_msg(const char *fmt, ...);
 void **find_iat_slot(const char *dll, const char *func);
@@ -161,6 +181,8 @@ void   patch_code_byte(volatile BYTE *p, BYTE v);
 HKEY   reg_open(const char *sub, REGSAM access);
 int    reg_get_int(HKEY k, const char *name, int *v);
 void   reg_set_int(HKEY k, const char *name, int v);
+int    reg_get_str(HKEY k, const char *name, char *s, DWORD size);
+void   reg_set_str(HKEY k, const char *name, const char *s);
 void    subclass(HWND h, const char *prop, WNDPROC proc);
 LRESULT subclass_next(HWND h, const char *prop, UINT msg, WPARAM w, LPARAM l);
 
@@ -202,6 +224,7 @@ int  game_timing_check(const char *who);
 extern int g_wsWidth;              /* active internal width, 0 = widescreen off */
 extern BYTE g_wsLayerRepeat[];
 void ws_init(int width);
+void ws_bars(int *l, int *r);      /* the narrowed view's black bars now, in game pixels (0 = none) */
 /* vsync.c */
 extern volatile LONG g_vbCount;
 extern volatile LONGLONG g_vbQpc;

@@ -7,7 +7,7 @@ if "%MINHOOK%"=="" set MINHOOK=%~dp0minhook
 set PATH=%MSYS2%\mingw32\bin;%PATH%
 set OUT=%~dp0build
 if not exist "%OUT%" mkdir "%OUT%"
-set CFLAGS=-m32 -O2 -Wall -Wextra -Wno-cast-function-type -Wno-format-truncation -static-libgcc -s
+set CFLAGS=-m32 -Os -fno-asynchronous-unwind-tables -fno-unwind-tables -ffunction-sections -fno-ident -Wl,--gc-sections -Wl,--build-id=none -Wall -Wextra -Wno-cast-function-type -Wno-format-truncation -static-libgcc -s
 
 rem the DLL: every module in dll\
 set DLLSRC=

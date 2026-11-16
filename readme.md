@@ -30,6 +30,7 @@ For disclosure, this project is AI-assisted: a coding agent wrote most of the co
   - Restore the 50Hz display mode from the console version.
   - Enable the in-game cheat mode.
   - Mods support.
+    - [Flink](/mods/flink/)
 
 ### Setup
 

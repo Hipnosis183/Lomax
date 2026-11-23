@@ -140,6 +140,28 @@ static int __cdecl hkSndDrvInit(HWND hwnd, UINT flags, UINT rate)
    frees a stopped loop's instance itself. */
 #define DSHW_STATUS_TEST         0x00435A68u
 
+/* DSHw_FreeSample (0x435460, level changes) releases a sample's buffers but clears a voice only when
+   GetStatus is exactly 1 or 4. A sound that ended since the last timer tick (0) or a playing loop (5)
+   keeps its voice marked active with its buffer now NULL, and DSHw_TimerService faults on it at
+   0x435A5A. The sample's voices are cleared first, with the timer callback held off through its own
+   re-entrancy guard, so it can't be halfway through a buffer that is being released. */
+#define FN_DSHW_FREESAMPLE       0x00435460u
+#define G_SNDTIMERBUSY           ((volatile LONG *)0x00466B6Cu)
+#define G_DSHWVOICES             ((volatile DWORD *)0x005A3138u)   /* {flags, sample, instance} */
+#define DSHW_VOICES              32
+static int (__cdecl *oDshwFreeSample)(int);
+
+static int __cdecl hkDshwFreeSample(int sample)
+{
+    int i, r, tries = 0, held;
+    while (!(held = !InterlockedCompareExchange(G_SNDTIMERBUSY, 1, 0)) && tries++ < 200) Sleep(1);
+    for (i = 0; i < DSHW_VOICES; i++)
+        if (G_DSHWVOICES[i * 3] && (int)G_DSHWVOICES[i * 3 + 1] == sample) G_DSHWVOICES[i * 3] = 0;
+    r = oDshwFreeSample(sample);
+    if (held) *G_SNDTIMERBUSY = 0;
+    return r;
+}
+
 static void dshw_init(void)
 {
     static const BYTE origTest[10] = { 0x83, 0xF9, 0x04, 0x74, 0x69, 0x83, 0xF9, 0x01, 0x74, 0x64 };
@@ -149,7 +171,8 @@ static void dshw_init(void)
         patch_code(DSHW_STATUS_TEST, newTest, sizeof(newTest));
     else
         log_msg("dshw: unexpected code at %08lX, loop status not patched", (unsigned long)DSHW_STATUS_TEST);
-    if (LOBYTE(GetVersion()) < 6) return;              /* XP and older: the game's own test */
+    mh_hook(FN_DSHW_FREESAMPLE, hkDshwFreeSample, (void **)&oDshwFreeSample, "DSHw_FreeSample");
+    if (LOBYTE(GetVersion()) < 6) return;             /* XP and older: the game's own test */
     if (!code_matches(SND_EMUL_JZ, origJz, sizeof(origJz))) {
         log_msg("sound: unexpected code at %08lX, backend choice not patched", (unsigned long)SND_EMUL_JZ);
         return;

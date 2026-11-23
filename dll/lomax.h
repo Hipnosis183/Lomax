@@ -225,6 +225,12 @@ extern int g_wsWidth;              /* active internal width, 0 = widescreen off 
 extern BYTE g_wsLayerRepeat[];
 void ws_init(int width);
 void ws_bars(int *l, int *r);      /* the narrowed view's black bars now, in game pixels (0 = none) */
+/* ghosts.c: during demos, objects still waiting to spawn in the wider view, drawn frozen */
+extern int g_ghostSandbox;         /* a trial spawn is running */
+void ghosts_init(void);
+void ghosts_reset(void);
+void ghosts_update(int demo);
+void ghosts_draw(void);
 /* vsync.c */
 extern volatile LONG g_vbCount;
 extern volatile LONGLONG g_vbQpc;

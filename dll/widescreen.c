@@ -533,20 +533,23 @@ static void (__cdecl *oActorKill)(BYTE *);
 static int *__cdecl hkTrySpawn(BYTE *rec)
 {
     int *a = oTrySpawn(rec);
-    if (a) log_msg("T%u spawn %d,%d pl%d", *G_TICK, *(short *)(rec + 0xC), *(short *)(rec + 0xE),
-                   *(short *)((BYTE *)a + 0x5E));
+    if (a && !g_ghostSandbox)
+        log_msg("T%u spawn %d,%d pl%d", *G_TICK, *(short *)(rec + 0xC), *(short *)(rec + 0xE),
+                *(short *)((BYTE *)a + 0x5E));
     return a;
 }
 
 static void __cdecl hkActorDespawn(BYTE *a)
 {
-    log_msg("T%u despawn %d,%d pl%d", *G_TICK, *(int *)(a + 0x3C), *(int *)(a + 0x40), *(short *)(a + 0x5E));
+    if (!g_ghostSandbox)
+        log_msg("T%u despawn %d,%d pl%d", *G_TICK, *(int *)(a + 0x3C), *(int *)(a + 0x40), *(short *)(a + 0x5E));
     oActorDespawn(a);
 }
 
 static void __cdecl hkActorKill(BYTE *a)
 {
-    log_msg("T%u kill %d,%d pl%d", *G_TICK, *(int *)(a + 0x3C), *(int *)(a + 0x40), *(short *)(a + 0x5E));
+    if (!g_ghostSandbox)
+        log_msg("T%u kill %d,%d pl%d", *G_TICK, *(int *)(a + 0x3C), *(int *)(a + 0x40), *(short *)(a + 0x5E));
     oActorKill(a);
 }
 
@@ -568,6 +571,7 @@ static void __cdecl hkObjectsSpawn(void)
     i = ws_demo_enter();
     oObjectsSpawn();
     if (i) ws_demo_leave();
+    if (g_wsWidth) ghosts_update(g_demo);
 }
 
 static void __cdecl hkActorsUpdateAll(void)
@@ -600,16 +604,18 @@ static void __cdecl hkActorsDrawAndCull(void)
     }
     oActorsDrawAndCull();
     g_demoCull = 0;
+    if (g_wsWidth) ghosts_draw();
 }
 
 static void ws_layers_reset(void);
-static void __cdecl hkLevelStart(void) { ws_demo_reset(); ws_layers_reset(); oLevelStart(); }
+static void __cdecl hkLevelStart(void) { ws_demo_reset(); ws_layers_reset(); ghosts_reset(); oLevelStart(); }
 
 
 static int __cdecl hkLevelLoadWorld(int a)
 {
     ws_demo_reset();
     ws_layers_reset();
+    ghosts_reset();
     if (cfg.dbgTrace) log_msg("T%u LoadWorld section %d demo %d", *G_TICK, *G_CURSECTION, *G_DEMODATA != NULL);
     ws_set_demo_mode(*G_DEMODATA != NULL);         /* before the planes are set up */
     return oLevelLoadWorld(a);
@@ -992,6 +998,7 @@ void ws_init(int width)
         mh_hook(FN_OBJECTS_SPAWN, hkObjectsSpawn, (void **)&oObjectsSpawn, "Objects_SpawnNearCamera");
         mh_hook(FN_ACTORS_UPDATEALL, hkActorsUpdateAll, (void **)&oActorsUpdateAll, "Actors_UpdateAll");
         mh_hook(FN_TRAPDOOR_INIT, hkTrapdoorInit, (void **)&oTrapdoorInit, "Trapdoor_Init");
+        if (g_wsWidth) ghosts_init();
     }
     if (cfg.dbgTrace) {
         mh_hook(FN_OBJECT_TRYSPAWN, hkTrySpawn, (void **)&oTrySpawn, "Object_TrySpawn");

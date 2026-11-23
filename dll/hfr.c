@@ -87,6 +87,7 @@ typedef struct {
     short kind, ord;          /* ord: n-th Actor_Draw of that actor in this frame */
     short tile;               /* layer: full tile size, 0 = scaled (no edge fix) */
     short valid;              /* anchor known */
+    short plane;              /* actor placed in its plane's world: plane index + 1, else 0 */
     unsigned text;            /* text: hash of the characters; moves only between equal strings */
     int ax, ay, az;           /* screen anchor (az: mesh depth) */
     int z;                    /* scale around the anchor, per mille; 0 = unknown (moves only) */
@@ -256,6 +257,7 @@ static void __cdecl hkHfrActorDraw(int *a, int scale, int angle, int alpha)
             s->ay = a[0x10] - *(const int *)(pl + 8);
             s->z = scale;
             s->valid = 1;
+            s->plane = (short)(*(short *)((BYTE *)a + 0x5E) + 1);
         }
     }
     before = G_SPRITEQUEUE[0];
@@ -571,6 +573,22 @@ static void hfr_apply(void)
     }
 }
 
+/* An actor drawn for the first time has no previous position. It takes its plane's camera motion, so
+   for that tick it stays put in the world; left still on screen it slid against the background on the
+   in-between frames and snapped back at the next tick (seen when a frozen ghost becomes the real actor). */
+static int g_hfrScroll[MAX_PLANES][2], g_hfrScrollValid;
+
+static void hfr_first_motion(HfrSrc *s, int lim)
+{
+    const BYTE *pl;
+    int dx, dy;
+    if (!g_hfrScrollValid || s->plane < 1 || s->plane > MAX_PLANES) return;
+    pl = (const BYTE *)(G_PLANES + (s->plane - 1) * PLANE_STRIDE);
+    dx = g_hfrScroll[s->plane - 1][0] - *(const int *)(pl + 4);
+    dy = g_hfrScroll[s->plane - 1][1] - *(const int *)(pl + 8);
+    if (abs(dx) <= lim && abs(dy) <= lim) { s->dx = dx; s->dy = dy; }
+}
+
 static void __cdecl hkHfrDrawTilemaps(void)
 {
     HfrSrc *cur, *prev = g_hfrSrc[g_hfrCur ^ 1], *cam;
@@ -581,7 +599,10 @@ static void __cdecl hkHfrDrawTilemaps(void)
     g_hfrRec = 0;
     g_hfrHas3D = *G_HAS3DQUADS;
     g_hfrSpan = g_hfrTicks;
-    if (!g_hfrValid) memset(g_hfrPrevHash, 0, sizeof(g_hfrPrevHash));  /* new surfaces/level: no motion */
+    if (!g_hfrValid) {                           /* new surfaces/level: no motion */
+        memset(g_hfrPrevHash, 0, sizeof(g_hfrPrevHash));
+        g_hfrScrollValid = 0;
+    }
     if ((cam = hfr_new_src(NULL, HFR_SRC_CAMERA)) && plane) {   /* entries no hook saw */
         cam->ax = -*(const int *)(plane + 4);
         cam->ay = -*(const int *)(plane + 8);
@@ -592,13 +613,14 @@ static void __cdecl hkHfrDrawTilemaps(void)
     for (i = 0; i < nCur; i++) {                 /* motion: the same source in the previous frame */
         HfrSrc *s = &cur[i];
         unsigned h = hfr_hash(s->key, s->kind, s->ord);
-        int lim = HFR_MAX_JUMP * g_hfrTicks;
+        int lim = HFR_MAX_JUMP * g_hfrTicks, found = 0;
         s->dx = s->dy = s->dz = 0;
         s->r = 65536;
         if (!s->valid) continue;
         for (; g_hfrPrevHash[h]; h = (h + 1) & (HFR_HASH - 1)) {
             const HfrSrc *p = &prev[g_hfrPrevHash[h] - 1];
             if (p->key != s->key || p->kind != s->kind || p->ord != s->ord) continue;
+            found = 1;
             if (p->valid && p->text == s->text) {
                 /* the jump limit applies to the motion at the anchor, or the nearest screen point */
                 int r = s->z > 0 && p->z > 0 ? (int)((LONGLONG)p->z * 65536 / s->z) : 65536;
@@ -613,7 +635,14 @@ static void __cdecl hkHfrDrawTilemaps(void)
             }
             break;
         }
+        if (!found) hfr_first_motion(s, lim);
     }
+    for (i = 0; i < MAX_PLANES; i++) {
+        const BYTE *pl = (const BYTE *)(G_PLANES + i * PLANE_STRIDE);
+        g_hfrScroll[i][0] = *(const int *)(pl + 4);
+        g_hfrScroll[i][1] = *(const int *)(pl + 8);
+    }
+    g_hfrScrollValid = 1;
     memset(g_hfrPrevHash, 0, sizeof(g_hfrPrevHash));
     for (i = 0; i < nCur; i++) {
         unsigned h = hfr_hash(cur[i].key, cur[i].kind, cur[i].ord);

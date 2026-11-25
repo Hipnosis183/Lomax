@@ -21,7 +21,8 @@
  * Here: the converter's 'Spik Prot' (Lomax's decoration, object 51) with Flink's FIRE (each piece at
  * (-16, -32): the anchor is the sprite's top-left + (16, 32)); params timer, height, how-many, flipped.
  * The motion is all in the update, the draw one Actor_Draw a piece in a fixed order (lava.c's
- * lava_piece). Lomax's culling of the decoration stands for Flink's window.
+ * lava_piece). It is never culled by the game (Flink's window 0x18) and despawns itself once nothing of
+ * its arc can be on Lomax+'s widest view (prot_far), so its balls don't vanish in the air.
  */
 #include "flink.h"
 #include "enemy.h"
@@ -39,6 +40,11 @@
 #define PROT_ANCHOR_X    16              /* FIRE's pieces at (-16, -32) */
 #define PROT_ANCHOR_Y    32
 #define SND_PROT_SPRAY   0x32            /* (0x267D8) */
+#define PROT_REACH       288             /* the arc's far end and its droplets: x +- 288 ... */
+#define PROT_BACK        48              /* ... and its near end, 48 px back from x */
+#define PROT_FAR         96              /* despawned this far beyond the view (as balls.c's) */
+#define PROT_VIEW_W      512             /* Lomax+'s widest view */
+#define PROT_VIEW_H      240
 
 static const int PROT_FRAME[4] = { 2, 1, 0, 2 };   /* 0x2691C: +0x4A, +0x4E, +0x52 = FIRE frames 2, 1, 0 */
 
@@ -68,12 +74,29 @@ static void ball_at(int x0, const Prot *p, int k, int *x, int *y)
     *y = p->base - PROT_SPRITE - (int)(((unsigned)(WORD)G_SINTABLE[(ph * 4) & 0x3FF] * (unsigned)p->height4) >> 16);
 }
 
+/* Lomax's cull goes by the actor's x, the arc's start, while its balls come down 254 px away: with a
+   wide view the camera passed the start with balls still on screen, and they all vanished at once.
+   So it is never culled by the game and despawns itself once nothing of the arc can be on Lomax+'s
+   widest view (its placement spawns it again, as Flink's restarts out of its window). A Generator's
+   (placement flag 0x2000) only for its x, as balls.c's: despawned for its y it would not come back. */
+static int prot_far(const BYTE *a, const Prot *p)
+{
+    const BYTE *pl = PLANE(A_PLANE(a));
+    BYTE *def = A_DEF(a);
+    int x = A_X(a) - P_CAMX(pl), y = A_Y(a) - P_CAMY(pl);
+    int x1 = x - (p->left ? PROT_REACH : PROT_BACK), x2 = x + (p->left ? PROT_BACK : PROT_REACH);
+    int y1 = y - PROT_SPRITE - p->height4 / 4 - PROT_ANCHOR_Y, y2 = y + PROT_ANCHOR_Y;
+    if (x2 < -PROT_FAR || x1 > PROT_VIEW_W + PROT_FAR) return 1;
+    return !(def && D_FLAGS(def) & 0x2000) && (y2 < -PROT_FAR || y1 > PROT_VIEW_H + PROT_FAR);
+}
+
 /* the think (0x266B2) and the draw's motion (0x267E4) */
 static void __cdecl prot_update(BYTE *a)
 {
     Prot *p = prot_of(a);
     int k, n = 0;
     if (!p || !g_active) return;
+    if (prot_far(a, p)) { p->type = NULL; Actor_Despawn(a); return; }
     if (!p->ready) {
         if (lava_surface() == NO_GROUND) return;
         p->ready = 1;
@@ -153,6 +176,7 @@ void prot_spawn(BYTE *a, BYTE *def)
     p->type = A_TYPE(a);
     A_FLAGS(a) &= ~(0x200000u | AF_CONTACT);     /* the hurt is Flink's box (prot_update) */
     A_LAYER(a) = (short)FLINK_LAYER(1);          /* (a5) = 0x7D6C: list 1 */
+    A_CULL(a) = CULL_NEVER;                      /* (window 0x18; it despawns itself: prot_far) */
     A_UPDATE(a) = (void *)prot_update;
     A_DRAW(a) = (void *)prot_draw;
     set_anim(a, "FIRE");

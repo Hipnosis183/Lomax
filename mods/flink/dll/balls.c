@@ -26,8 +26,8 @@
  * knob, then the links (in a bucket the first queued is in front). Lomax's own cull would despawn it
  * by the pivot while a ball still shows, so it is never culled by the game and despawns itself once
  * the pivot is BALL_FAR px beyond the view plus its radius (its placement spawns it again, as
- * Flink's restarts out of its window). The bounce sound is not played (Flink's 0x18 has no known
- * Lomax match).
+ * Flink's restarts out of its window; a Generator's ball only for its x, see far_away). The bounce
+ * sound is not played (Flink's 0x18 has no known Lomax match).
  */
 #include "flink.h"
 
@@ -82,11 +82,16 @@ static void ball_point(const BYTE *a, const Ball *b, int k, int d, int *x, int *
     *y = A_Y(a) + (d * G_SINTABLE[((an >> 1) + 256) & 1023] >> 14);
 }
 
+/* A Generator's ball (placement flag 0x2000) is tested in x only, as Flink's watcher (0x2DFB0) tests
+   its group: despawned for its y it would not come back by proximity. 6-2's second row (y 398 .. 511,
+   its Generator at (318, 286), reaching up to y 86) fires with the camera high, and lost its lower balls. */
 static int far_away(const BYTE *a, int r)
 {
     const BYTE *pl = PLANE(A_PLANE(a));
+    BYTE *def = A_DEF(a);
     int x = A_X(a) - P_CAMX(pl), y = A_Y(a) - P_CAMY(pl), m = r + BALL_FAR;
-    return x < -m || x > BALL_VIEW_W + m || y < -m || y > BALL_VIEW_H + m;
+    if (x < -m || x > BALL_VIEW_W + m) return 1;
+    return !(def && D_FLAGS(def) & 0x2000) && (y < -m || y > BALL_VIEW_H + m);
 }
 
 static void __cdecl ball_update(BYTE *a)

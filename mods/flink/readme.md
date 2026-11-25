@@ -10,7 +10,7 @@ For disclosure, this project is AI-assisted: a coding agent wrote most of the co
 
 Download and unpack the mod files in the game folder next to `LOMAX.EXE`, the `FLINK.DLL` file full path should be `MODS/FLINK/FLINK.DLL`.
 
-Next, you need a copy of the **European Sega CD** version of Flink in `BIN/CUE` format, and place it under `MODS/FLINK`, then execute the extractor program `FLINK.EXE`. It will unpack/convert all the necessary game data. Once it's done, you can delete Flink's disc image.
+Next, you need a **Redump-verified** copy of the **European Sega CD** version of Flink in `BIN/CUE` format, and place it under `MODS/FLINK`, then execute the extractor program `FLINK.EXE`. It will unpack/convert all the necessary game data. Once it's done, you can delete Flink's disc image.
 
 To enable the mod, start Lomax normally and go to **File > Properties > Extra**, and select **Flink** in the setting **Load Mod**. A restart is required.
 

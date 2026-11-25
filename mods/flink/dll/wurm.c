@@ -14,17 +14,17 @@
  *   quarter circle of radius 64 (Flink's sine table 0x1491E, 8.8 words, 64 a quarter at s 512):
  *   (-64 cos, -64 sin), sprite frame 2 below s 250, 1 below 350, 0 above; then level, s - 512 / 5 px
  *   on and 67 px up, wiggling 0-4 px. Facing left it is mirrored around x - 68 and the sprites
- *   flipped; hanging, around y - 32 and flipped upside down. The head is at s = p, the body segments
+ *   flipped; hanging, around y - 32 and flipped upside down. The head is at s = p - 100 (none yet below p = 100), the body segments
  *   (TAIL) every 100 back to the mud, drawn behind the mud and in front of the head (Flink's sprite
  *   order). 100 path units are about 20 px.
  * The vertical Raketen wurm ('height' h not 0: 4-2, 8-1; think 0x25C74, draw 0x25DE8):
  * - It comes out with Flink 40 to 80 px away, at speed 2, facing right, and its p grows until
  *   p > length + h + 128: it has gone into a second hole h px above its own (below, hanging) and
  *   waits there (it comes out of its own hole again). Clods at p = 50.
- * - Its head and length / 16 segments (all frame 2, the rising sprite) are 16 px apart in a column at
+ * - Its length / 16 segments, the head among them (all frame 2, the rising sprite), are 16 px apart in a column at
  *   x - 12, wiggling 0-4 px with their y (|(y & 63) - 32| / 8; Flink's screen y, here the world's),
- *   flipped left-right where (y & 63) < 32: the head's top at y + 40 - p - 16 * (length / 16) +
- *   length (hanging: y - 56 + p - length + 16 * (length / 16)), the segments behind it. Only those
+ *   flipped left-right where (y & 63) < 32: the head's top at y + 40 - p - 16 * (length / 16 - 1) +
+ *   length (hanging: y - 56 + p - length + 16 * (length / 16 - 1)), the segments behind it. Only those
  *   between the holes are drawn and touch (top from the far hole - 24 to its own). Its own hole's mud
  *   shows while p < length + 64, the far one's once p > h + 64 (hanging, h + 48).
  * Both:
@@ -47,7 +47,9 @@
  * Drawing: while it waits nothing is drawn, its mud neither (Flink's waiting think ends in 0x3333E,
  * which leaves the actor off the draw list), so the mud shows only while it is out. Going back after
  * a stomp or a hit it blinks (not drawn every 4th frame), as the Ingredient Holder after its first hit
- * (Flink's doesn't blink).
+ * (Flink's doesn't blink). In a map whose Scroll Point keeps the camera's y (8-1) Flink's screen ends
+ * at the map's height - 8, above the mud of the holes on the map's floor; Lomax's view is 16 px taller
+ * and reaches that strip, so that mud isn't drawn (mud_off_screen).
  */
 #include "enemy.h"
 
@@ -62,6 +64,8 @@
 #define WURM_GRAVITY     0x4000
 #define WURM_DEAD_TICKS  150
 #define WURM_MUD_TICKS   8
+#define WURM_MUD_TOP     7              /* the mud's sprite starts this far above its point */
+#define KEPT_Y_MARGIN    8              /* Flink's screen with its y kept ends this far above the map's bottom */
 #define VIEW_H           240
 /* the arching Raketen wurm / the vertical one: speed, Flink's distance to come out, clods at */
 #define ARC_SPEED        8
@@ -122,14 +126,14 @@ static int seg_list(const Wurm *w, Seg *sg)
     int n = 0, s, k, cnt, head, lo, hi;
     if (w->p < 0) return 0;
     if (!w->h) {                                                 /* 0x26016 */
-        for (s = w->p; s >= 0 && n < WURM_SEGS; s -= WURM_STEP, n++) {
+        for (s = w->p - WURM_STEP; s >= 0 && n < WURM_SEGS; s -= WURM_STEP, n++) {   /* p / 100 of them */
             path_at(w, s, &sg[n].x, &sg[n].y, &sg[n].f);
             sg[n].head = n == 0;
             sg[n].fl = flips(w);
         }
         return n;
     }
-    cnt = w->len / VERT_STEP + 1;                                 /* 0x25DE8 */
+    cnt = w->len / VERT_STEP;                                     /* 0x25DE8 */
     if (w->up) {
         head = w->hy + w->p - 56 - w->len + VERT_STEP * (cnt - 1);
         lo = w->hy - WURM_SPR; hi = w->hy + w->h;
@@ -276,6 +280,13 @@ static void draw_frame(BYTE *a, const char *tag, int f, int x, int y, unsigned f
     }
 }
 
+/* its own hole's mud is below the screen Flink would show (8-1's floor) */
+static int mud_off_screen(const BYTE *a, const Wurm *w)
+{
+    return !w->up && scroll_keeps_y() &&
+           w->hy - WURM_MUD_TOP >= P_H(PLANE(A_PLANE(a))) * 16 - KEPT_Y_MARGIN;
+}
+
 /* in a bucket the first queued is in front: the mud, then the segments from the tail to the head */
 static void __cdecl wurm_draw(BYTE *a)
 {
@@ -293,7 +304,7 @@ static void __cdecl wurm_draw(BYTE *a)
     if (w->back && !(w->t & 3)) return;    /* going back after a hit: blinks, as the Ingredient Holder */
     mud = w->up ? "MUDV" : "MUD ";
     mf = (w->t / WURM_MUD_TICKS) & 1;
-    if (!w->h || w->p < w->len + 64) draw_frame(a, mud, mf, w->hx, w->hy, 0, 1, bucket);
+    if ((!w->h || w->p < w->len + 64) && !mud_off_screen(a, w)) draw_frame(a, mud, mf, w->hx, w->hy, 0, 1, bucket);
     if (w->h && w->p > w->h + (w->up ? 48 : 64))                  /* the far hole */
         draw_frame(a, mud, mf, w->hx, w->up ? w->hy + w->h : w->hy - w->h, 0, 1, bucket);
     n = seg_list(w, sg);

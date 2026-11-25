@@ -66,6 +66,9 @@ static int scrolls_x(void) { return g.tx && !g.keepx; }
 int scroll_owns_x(void) { return g_active && g.on && (g.keepx || g.tx); }
 static int scrolls_y(void) { return g.ty && !g.keepy; }
 
+/* a Scroll Point keeps the camera's y: Flink's screen then ends 8 px above the map's bottom (0x2E628) */
+int scroll_keeps_y(void) { return g_active && g.on && g.keepy; }
+
 /* Flink's camera speed 0x8738 not 0: scrolling and not stopped at the map's edge (scroll_after) */
 int scroll_x_moving(void) { return g_active && g.on && scrolls_x() && g.vx; }
 

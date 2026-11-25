@@ -128,7 +128,7 @@ static int plat_trap(const Place *p, PlatSpec *s)
    (the pivot's think 0x2B5E8, the platforms' 0x2B6BA, the chains' draw 0x2B752). Params: radius, arms,
    speed / 2 (Lomax's, without the DLL), phase (Flink's 'pre-run' frames of turning, 0x2B5A6, in
    Lomax's units: angle * 8; none with 'dont move', which doesn't turn unridden), speed * 8 (Lomax's
-   phase a tick), first link (0, the pivot's RING; 16 with 'knob', whose KNOB isn't converted), and
+   phase a tick), first link (0, the pivot's RING; 16 with 'knob', drawn from a 'KNOB' record), and
    Flink's own for wheel.c: speed, pre-run, the bounce angle (+0x58: 'winkel' * 2, 4000 for 0),
    'stretch-factor' and the flags 1 'stretch' (checkbox 16: META's cloud wheels, whose clouds come in
    toward the pivot and go back out) and 2 (checkbox 32: the arms' stretch staggered). */
@@ -547,6 +547,8 @@ void convert_platforms(FWorld *fw, Places *pl, Sprites *sp, int first_type, Ctx 
         for (k = 0; k < (int)(sizeof(PLATFORMS) / sizeof(PLATFORMS[0])); k++)
             if (!strcmp(PLATFORMS[k].name, p->name)) { fn = PLATFORMS[k].fn; break; }
         if (fn) ok = fn(p, &s);
+        /* a wheel with 'knob' (checkbox 4): its pivot draws KNOB (0x2B6B2, FLINK.DLL wheel_draw) */
+        if (ok && !strcmp(s.beh, "Rota") && p->check & 4 && recs_has(recs, "KNOB")) rl(&s, "KNOB", 1, "KNOB");
         if (ok)
             for (k = 0; k < s.nrl && ok; k++)
                 for (j = 0; j < s.rl[k].ntags; j++) {

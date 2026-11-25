@@ -28,8 +28,8 @@
  * - The chains: Lomax's DrawSpokes draws them with Draw_RopeSegments (0x425D40), which centres the raw
  *   sprite by its size, and Flink's ring frame is 48 px wide: every chain would be 16 px left of its
  *   pivot. Flink's draw 0x2B752 (per platform) puts link k (1 .. length - 1) at k * (64 - (count >> 1))
- *   quarter px from the pivot, so the links close up with the platform; without 'knob' the pivot draws a
- *   RING itself (0x2B6B2). Here each link is one Actor_Draw of the converter's RING record (ring_record:
+ *   quarter px from the pivot, so the links close up with the platform; the pivot draws its KNOB with
+ *   'knob', else a RING (0x2B6B2). Here each link is one Actor_Draw of the converter's RING record (ring_record:
  *   anchored as Flink's) with the actor moved onto it, so that Lomax+'s FPS Override moves each link
  *   smoothly, as swing.c does.
  * Lomax's top speed / speed / phase (+0x84 / +0x88 / +0x8C) are kept in step for anything reading them.
@@ -128,6 +128,11 @@ static void __cdecl wheel_draw(BYTE *a)
     int x0 = A_X(a), y0 = A_Y(a), k, n, x, y, arms = RO_ARMS(a);
     if (!w) { Rota_RotatingPlatforms_DrawSpokes(a); return; }
     if (!w->knob) draw_actor(a);                     /* the pivot's RING (0x2B6B2) */
+    else if (record_of(a, FOURCC("KNOB"))) {         /* or its KNOB (absent from older extractions) */
+        set_anim(a, "KNOB");
+        draw_actor(a);
+        set_anim(a, "RING");
+    }
     for (k = 0; k < arms; k++)                       /* 0x2B752 */
         for (n = 1; n * 16 <= RO_RADIUS(a); n++) {
             arm_point(a, arm_index(w, k), n * arm_step(w, k), &x, &y);

@@ -431,6 +431,7 @@ void secret_before(void);                /* levels.c: a death in a secret level 
 void secret_after(void);
 void scroll_reset(void);
 int  scroll_owns_x(void);                /* a Scroll Point moves or holds the camera's x */
+int  scroll_keeps_y(void);               /* a Scroll Point holds the camera's y */
 int  scroll_x_moving(void);              /* the camera's x moves at a Scroll Point's speed (Flink's 0x8738 not 0) */
 void scroll_wrap(void);                  /* the map wraps around across, the camera on past its edges */
 void scroll_stop_x(void);                /* the camera's x stays from now on */
